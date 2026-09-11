@@ -9,25 +9,45 @@ subreddits:
   - investing
   - stocks
 
-# Vetted financial publishers. A headline is counted only if its URL or
-# publisher name matches one of these (see sentiment_analyst.fetch_news_mentions).
-# reuters.com and bloomberg.com rarely appear in yfinance's feed directly, so the
-# aggregators that do carry it are listed alongside them.
+# Vetted financial publishers. An article is counted only if its URL or its
+# publisher/source name matches one of these (see news_sources._matches_allowlist).
+#
+# Providers name their sources differently: yfinance reports "Yahoo Finance" and
+# full URLs, while Finnhub reports bare names like "Yahoo", "CNBC" or
+# "SeekingAlpha" with no domain. Both spellings are therefore listed, because a
+# match is a plain substring test against "<url> <source>". Matching is
+# case-insensitive.
 news_domains:
+  # Wire services and major papers
   - reuters.com
   - bloomberg.com
-  - finance.yahoo.com
-  - yahoo finance
   - wsj.com
   - wall street journal
+  - barrons.com
+  - financial times
+  # Aggregators and market media (domain + bare-name spellings)
+  - finance.yahoo.com
+  - yahoo
+  - cnbc.com
+  - cnbc
+  - marketwatch.com
+  - marketwatch
   - investors.com
   - investor's business daily
   - thestreet.com
-  - cnbc.com
-  - marketwatch.com
-  - barrons.com
+  - thestreet
   - fool.com
+  - motley fool
   - seekingalpha.com
+  - seekingalpha
+  - benzinga.com
+  - benzinga
+  - investing.com
+  - zacks.com
+  - zacks
+  - businesswire.com
+  - globenewswire.com
+  - prnewswire.com
 
 rss_feeds:
   - name: example_macro_feed

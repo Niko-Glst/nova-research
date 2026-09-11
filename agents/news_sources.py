@@ -173,25 +173,31 @@ def fetch_tiingo_news(
 
 
 def fetch_finnhub_news(
-    symbol: str, allowed_domains: list[str], lookback_days: int = 30
+    symbol: str,
+    allowed_domains: list[str],
+    lookback_days: int = 30,
+    end_days_ago: int = 0,
 ) -> list[NewsItem]:
-    """Fetch company news for a symbol from Finnhub.
+    """Fetch company news for a symbol from Finnhub over one date range.
 
     Finnhub's company-news endpoint takes an explicit date range and is
     available on the free tier, which is what makes volume tracking possible.
+    It does cap the response at a few hundred articles, so `end_days_ago` lets
+    a caller slice the history into windows that each fit under that cap --
+    see fetch_finnhub_windowed.
 
     Raises ValueError when the API key is absent or the request fails, so the
     caller can fall back to another provider.
     """
     credentials = get_finnhub_credentials()  # raises when FINNHUB_API_KEY is unset
 
-    today = datetime.now(timezone.utc).date()
-    start = today - timedelta(days=lookback_days)
+    end = datetime.now(timezone.utc).date() - timedelta(days=end_days_ago)
+    start = end - timedelta(days=lookback_days)
     query = urllib.parse.urlencode(
         {
             "symbol": symbol.strip().upper(),
             "from": start.isoformat(),
-            "to": today.isoformat(),
+            "to": end.isoformat(),
         }
     )
     request = urllib.request.Request(
@@ -241,6 +247,51 @@ def fetch_finnhub_news(
             )
         )
     return items
+
+
+def fetch_finnhub_windowed(
+    symbol: str,
+    allowed_domains: list[str],
+    lookback_days: int = 30,
+    recent_window_days: int = 3,
+) -> list[NewsItem]:
+    """Fetch Finnhub news as two windows so the per-response cap cannot hide the baseline.
+
+    A single 30-day request for a heavily covered name comes back capped at a
+    few hundred articles, all from the last day or two -- which makes the older
+    baseline look empty and every such name look like a spike. Requesting the
+    recent window and the baseline window separately gives each its own cap, so
+    both periods are represented.
+
+    Falls back to a single request if the second window fails, since a partial
+    result still supports sentiment scoring.
+    """
+    recent = fetch_finnhub_news(
+        symbol, allowed_domains, lookback_days=recent_window_days, end_days_ago=0
+    )
+
+    baseline_span = max(1, lookback_days - recent_window_days)
+    try:
+        baseline = fetch_finnhub_news(
+            symbol,
+            allowed_domains,
+            lookback_days=baseline_span,
+            end_days_ago=recent_window_days,
+        )
+    except ValueError:
+        baseline = []
+
+    # De-duplicate on URL: the windows share a boundary day, so an article can
+    # legitimately appear in both responses.
+    seen: set[str] = set()
+    merged: list[NewsItem] = []
+    for item in recent + baseline:
+        key = item.url or f"{item.title}|{item.published}"
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
 
 
 def fetch_yfinance_news(symbol: str, allowed_domains: list[str]) -> list[NewsItem]:
@@ -316,7 +367,7 @@ def fetch_news(
 
     # Dated providers first: only they can support recency weighting and volume.
     for name, fetch in (
-        ("finnhub", fetch_finnhub_news),
+        ("finnhub", fetch_finnhub_windowed),
         ("tiingo", fetch_tiingo_news),
     ):
         try:

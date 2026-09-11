@@ -131,11 +131,43 @@ def analyze_volume(
             notes=(
                 f"Coverage volume cannot be measured from {provider}: it returns "
                 f"only the newest articles, with no historical window to compare "
-                f"against. Set TIINGO_API_KEY for volume tracking."
+                f"against. Set FINNHUB_API_KEY for volume tracking."
             ),
         )
 
     dated = [item for item in items if item.published is not None]
+
+    # Even a windowed provider truncates: Finnhub caps a company-news response
+    # at a few hundred articles, which on a heavily covered name is filled by
+    # the last day or two. The request asked for `baseline_window_days` of
+    # history, so if the oldest article is far newer than that, the response was
+    # capped and the "missing" baseline is an artifact of the cap, not a
+    # genuine absence of earlier coverage.
+    oldest_age = max(
+        (item.age_days for item in dated if item.age_days is not None), default=0.0
+    )
+
+    if dated:
+        # The baseline needs *some* span beyond the recent window to be a
+        # baseline at all. One extra day is not a comparison.
+        if oldest_age < recent_window_days + 1:
+            return VolumeRead(
+                recent_count=len(dated),
+                recent_window_days=recent_window_days,
+                baseline_count=0,
+                baseline_window_days=baseline_window_days,
+                recent_per_day=len(dated) / max(1.0, oldest_age),
+                baseline_per_day=0.0,
+                ratio=1.0,
+                status="unknown",
+                notes=(
+                    f"{len(dated)} articles span only the last {oldest_age:.1f} days: "
+                    f"the provider capped the response before reaching the baseline "
+                    f"window, so there is nothing to compare against. Coverage is "
+                    f"heavy enough to hit that cap, which is itself a sign of an "
+                    f"actively covered name."
+                ),
+            )
 
     if len(dated) < MIN_ARTICLES_FOR_SPIKE:
         return VolumeRead(
@@ -165,7 +197,12 @@ def analyze_volume(
         elif age <= baseline_window_days:
             baseline_count += 1
 
-    baseline_span = max(1, baseline_window_days - recent_window_days)
+    # Normalize the baseline over the span actually covered by the data, not
+    # the span requested. A capped response that reaches back 9 days must be
+    # divided by ~6 baseline days, not 27, or its rate is understated and every
+    # busy name reads as a spike.
+    covered_span = min(float(baseline_window_days), oldest_age)
+    baseline_span = max(1.0, covered_span - recent_window_days)
     recent_per_day = recent_count / max(1, recent_window_days)
     baseline_per_day = baseline_count / baseline_span
 

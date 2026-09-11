@@ -110,11 +110,36 @@ class TestAnalyzeVolume:
         assert volume.status == "unknown"
 
     def test_burst_with_no_baseline_is_a_spike(self):
-        """A name nobody was writing about that suddenly is."""
-        items = [_item(0.1), _item(0.5), _item(1.0), _item(2.0)]
-        volume = ns.analyze_volume(items, now=NOW)
+        """A name nobody was writing about that suddenly is.
+
+        The data must still reach past the recent window, so that an empty
+        baseline is a real absence rather than a truncated response.
+        """
+        items = [_item(0.1), _item(0.5), _item(1.0), _item(2.0), _item(25)]
+        volume = ns.analyze_volume(items, recent_window_days=3, now=NOW)
         assert volume.status == "spike"
-        assert volume.ratio == float("inf")
+
+    def test_data_confined_to_the_recent_window_is_unknown(self):
+        """Articles spanning only 2 days cannot be told apart from a capped feed.
+
+        Regression: a provider that caps its response at a few hundred articles
+        returns only the newest day or two for a heavily covered name, which
+        previously read as an infinite-ratio spike for every such name.
+        """
+        items = [_item(0.1), _item(0.5), _item(1.0), _item(1.8)]
+        volume = ns.analyze_volume(items, recent_window_days=3, now=NOW)
+        assert volume.status == "unknown"
+        assert "capped" in volume.notes
+
+    def test_baseline_rate_uses_the_span_actually_covered(self):
+        """A 9-day response must divide by ~6 baseline days, not the full 27.
+
+        Otherwise the baseline rate is understated and busy names spike falsely.
+        """
+        items = [_item(d) for d in (0.5, 1.0, 2.0)] + [_item(d) for d in (4, 5, 6, 7, 8)]
+        volume = ns.analyze_volume(items, recent_window_days=3, baseline_window_days=30, now=NOW)
+        # 5 baseline articles over ~5 covered days, not over 27.
+        assert volume.baseline_per_day > 0.5
 
     def test_baseline_excludes_the_recent_window(self):
         """Otherwise a spike would be measured partly against itself."""
