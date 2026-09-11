@@ -61,3 +61,6 @@ htmlcov/
 .ruff_cache/
 
 # --- detect-secrets baseline is tracked on purpose (not ignored) ---
+
+# --- Generated HTML reports ---
+reports/

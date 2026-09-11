@@ -43,7 +43,30 @@ python research.py TSLA --period 6mo     # different price window
 python research.py TSLA --insider-days 90
 python research.py AAPL --no-peers       # skip peer comparison (much faster)
 python research.py AAPL --json > report.json
+python research.py MP --html            # full HTML report + open in browser
+python research.py MP --html --no-open  # write it, don't open
 ```
+
+### HTML report
+
+`--html` writes a self-contained page to `reports/<SYMBOL>.html` (gitignored)
+and opens it. No CDN, no network calls at view time -- the charts are inline SVG.
+It carries everything the terminal shows, plus:
+
+- a **peer comparison chart**: each metric as a bar against the peer median, with
+  green on the favourable side (which differs per metric -- cheap is good for a
+  multiple, high is good for a margin);
+- a **SWOT** derived from the figures, where every line names the number it rests
+  on;
+- the **investment thesis**: the conditions that would have to hold for a
+  constructive view, each marked met / unmet / unknown, plus what would break it.
+
+### On "should I buy this?"
+
+The report deliberately does not answer that. It states what would have to be
+true, and where each of those conditions currently stands -- which is the part
+you can check against the next set of filings. See SECURITY.md: this is a
+research tool, not advice.
 
 A run produces one weighted verdict from four analysts:
 
@@ -52,11 +75,12 @@ A run produces one weighted verdict from four analysts:
 | Fundamental (+ peer comparison) | 1.0 | yfinance | no |
 | Technical | 0.8 | yfinance | no |
 | Insider activity | 0.6 | yfinance (Form 4) | no |
-| Sentiment | 0.4 | news headlines, Reddit | Reddit only |
+| Sentiment | 0.4 | Finnhub news, Reddit | both optional |
 
-Only the Reddit leg needs an API key. Without one it is reported as unavailable
-and the other three still run — a missing optional source degrades the read
-rather than breaking the pipeline.
+Only the sentiment leg needs keys, and it degrades rather than failing: without
+`FINNHUB_API_KEY` it falls back to yfinance headlines (which cannot support
+coverage-volume tracking), and without the Reddit keys that source is simply
+reported as unavailable. The other three analysts need no credentials at all.
 
 **A note on reading the output.** Insider *selling* is close to universal at
 large caps (diversification, taxes, scheduled 10b5-1 plans), so most megacaps
@@ -113,6 +137,12 @@ podcast_summarizer --> (feeds narrative_synth, not yet implemented)
   buys and sells from compensation grants and option exercises.
 - **`agents/research_report.py`** — combines the four implemented analysts into one
   weighted verdict; `research.py` at the repo root is its CLI.
+- **`agents/thesis.py`** — turns the figures into falsifiable conditions ("what must
+  be true") and the list of things that would break them.
+- **`agents/swot.py`** — a SWOT derived from measured figures, each entry carrying
+  the metric behind it.
+- **`agents/html_report.py`** — renders a report as a standalone HTML page with
+  inline-SVG charts.
 - **`agents/investor_board.py`** — a panel of fictional investor *archetypes* (not real
   individuals) that debate the inputs above.
 - **`agents/narrative_synth.py`** — combines all upstream signals into a single investment

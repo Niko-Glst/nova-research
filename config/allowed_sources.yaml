@@ -80,6 +80,13 @@ peer_groups:
   credit_services: [V, MA, AXP, PYPL, COF]
   aerospace_defense: [BA, LMT, RTX, NOC, GD]
   oil_gas_integrated: [XOM, CVX, SHEL, BP, TTE]
+  # Rare-earth and specialty miners. MP's closest listed comparables are other
+  # critical-minerals names rather than the diversified majors: they share the
+  # same demand driver (EV/magnet supply chains) and the same pre-scale margins.
+  other_industrial_metals_mining: [UEC, ALB, LAC, TMC, CRML, IPX]
+  # Reddit's real comparables are ad-supported social platforms of a similar
+  # scale, not the megacaps the broader industry key pulls in.
+  social_media: [PINS, SNAP, BMBL, MTCH, YELP]
 
 default_peers_by_sector:
   technology: [AAPL, MSFT, NVDA, GOOGL, AVGO]
@@ -90,6 +97,9 @@ default_peers_by_sector:
   communication_services: [GOOGL, META, NFLX, DIS, T]
   energy: [XOM, CVX, COP, SLB, EOG]
   industrials: [CAT, BA, HON, UNP, GE]
+  basic_materials: [LIN, SHW, FCX, NEM, ECL]
+  utilities: [NEE, DUK, SO, D, AEP]
+  real_estate: [PLD, AMT, EQIX, SPG, O]
 
 # Maximum peers to fetch per comparison. Each peer costs one rate-limited
 # request, so this caps how slow a single analysis can get.

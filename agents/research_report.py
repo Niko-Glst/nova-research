@@ -23,7 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from agents import fa_analyst, insider_analyst, sentiment_analyst, ta_analyst
+from agents import fa_analyst, insider_analyst, sentiment_analyst, swot as swot_module
+from agents import ta_analyst, thesis as thesis_module
 
 # How much each leg counts toward the combined score.
 WEIGHTS = {
@@ -62,6 +63,8 @@ class ResearchReport:
     insider: insider_analyst.InsiderRead | None = None
     errors: dict[str, str] = field(default_factory=dict)
     summary: str = ""
+    thesis: thesis_module.Thesis | None = None
+    swot: swot_module.Swot | None = None
 
 
 def _stance_value(stance: str | None) -> float | None:
@@ -162,6 +165,12 @@ def analyze(
         insider=insider,
         errors=errors,
         summary=summary,
+        thesis=thesis_module.build_thesis(
+            symbol, fundamental, technical, insider, sentiment
+        ),
+        swot=swot_module.build_swot(
+            symbol, fundamental, technical, insider, sentiment
+        ),
     )
 
 
@@ -322,6 +331,22 @@ def format_report(report: ResearchReport) -> str:
                 name, _, detail = entry.partition(" (")
                 reason = detail.rstrip(")").split(".")[0] if detail else "unavailable"
                 lines.append(f"      {name}: {reason}")
+        lines.append("")
+
+    # --- Thesis -----------------------------------------------------------
+    if report.thesis is not None and report.thesis.bull_case:
+        thesis = report.thesis
+        lines += ["-" * width, "  WHAT MUST BE TRUE", "-" * width]
+        lines.append(f"  {thesis.summary}")
+        lines.append("")
+        for condition in thesis.bull_case:
+            mark = {"met": "[x]", "unmet": "[ ]", "unknown": "[?]"}[condition.status]
+            lines.append(f"  {mark} {condition.claim}")
+            lines.append(f"      {condition.current}")
+        if thesis.breaks_if:
+            lines += ["", "  BREAKS IF:"]
+            for item in thesis.breaks_if:
+                lines.append(f"    - {item}")
         lines.append("")
 
     # --- Errors -----------------------------------------------------------

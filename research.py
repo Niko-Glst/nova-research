@@ -13,9 +13,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import webbrowser
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
+from pathlib import Path
 
-from agents import research_report
+from agents import html_report, research_report
 
 
 def _to_jsonable(value):
@@ -60,7 +63,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Count headlines from outside the allowlisted domains too.",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
+    parser.add_argument(
+        "--html",
+        nargs="?",
+        const="reports",
+        metavar="DIR",
+        help="Write a full HTML report (charts, SWOT, thesis) into DIR "
+        "(default: reports/) and open it in the browser.",
+    )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="With --html, write the file but do not open a browser.",
+    )
     return parser
+
+
+def _write_html(report, directory: str) -> Path:
+    """Render one report to an HTML file and return its path."""
+    out_dir = Path(directory)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    path = out_dir / f"{report.symbol}.html"
+    path.write_text(html_report.render_report(report, stamp), encoding="utf-8")
+    return path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,6 +113,12 @@ def main(argv: list[str] | None = None) -> int:
         if not args.json:
             print(research_report.format_report(report))
             print()
+
+        if args.html:
+            path = _write_html(report, args.html)
+            print(f"HTML report written to {path}")
+            if not args.no_open:
+                webbrowser.open(path.resolve().as_uri())
 
     if args.json:
         print(json.dumps([_to_jsonable(r) for r in reports], indent=2))
