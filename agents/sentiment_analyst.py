@@ -10,9 +10,15 @@ model: in market text the word that matters is "beat", "miss", "guidance" or
 is deliberately small and inspectable -- when a score looks wrong you can see
 exactly which words produced it.
 
-Reddit requires API credentials. When they are absent the Reddit leg is skipped
-and reported as unavailable rather than raising: a missing optional source
-should degrade the read, not break the pipeline.
+News is scored the way a desk reads a feed rather than as a flat average: each
+article is weighted by age (see agents/news_signal.py), and the *volume* of
+coverage is tracked separately from its direction, because a sudden burst of
+articles is a signal in itself. Retrieval lives in agents/news_sources.py, which
+prefers Tiingo (dated, detailed) and falls back to yfinance headlines.
+
+Reddit and Tiingo both require API credentials. When they are absent those legs
+are skipped and reported as unavailable rather than raising: a missing optional
+source should degrade the read, not break the pipeline.
 """
 
 from __future__ import annotations
@@ -20,8 +26,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-import yfinance as yf
-
+from agents import news_signal, news_sources
 from common.rate_limit import get_limiter
 from config.settings import get_reddit_credentials, load_allowed_sources
 
@@ -77,6 +82,8 @@ class SentimentRead:
     news_sample: int = 0
     sources_unavailable: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    news_detail: news_signal.NewsSignal | None = None
+    news_provider: str = ""
 
 
 def _lookup(token: str) -> float | None:
@@ -213,70 +220,31 @@ def fetch_reddit_mentions(
     return mentions
 
 
-def fetch_news_mentions(symbol: str, allowed_domains: list[str]) -> list[dict]:
-    """Fetch recent news headlines for a symbol, restricted to allowed_domains.
+def fetch_news_mentions(symbol: str, allowed_domains: list[str]) -> list[news_sources.NewsItem]:
+    """Fetch recent news for a symbol, restricted to allowed_domains.
 
-    Uses the headlines yfinance attaches to a ticker, filtered to the allowlist.
+    Delegates to news_sources, which prefers Tiingo and falls back to yfinance.
+    Kept as a named function because it is part of this module's public surface.
     """
-    get_limiter("yfinance").wait()
-    try:
-        articles = yf.Ticker(symbol.strip().upper()).news or []
-    except Exception:
-        return []
-
-    allowed = {d.lower() for d in allowed_domains}
-    mentions: list[dict] = []
-
-    for article in articles:
-        # yfinance has moved this payload around between versions; look in both
-        # the flat shape and the nested "content" shape.
-        content = article.get("content") if isinstance(article, dict) else None
-        record = content if isinstance(content, dict) else article
-        if not isinstance(record, dict):
-            continue
-
-        title = record.get("title") or ""
-        summary = record.get("summary") or record.get("description") or ""
-
-        provider = record.get("provider")
-        publisher = ""
-        if isinstance(provider, dict):
-            publisher = provider.get("displayName") or ""
-        else:
-            publisher = record.get("publisher") or ""
-
-        link = ""
-        url_field = record.get("canonicalUrl") or record.get("clickThroughUrl")
-        if isinstance(url_field, dict):
-            link = url_field.get("url") or ""
-        else:
-            link = record.get("link") or ""
-
-        haystack = f"{link} {publisher}".lower()
-        if allowed and not any(domain in haystack for domain in allowed):
-            continue
-
-        mentions.append(
-            {
-                "title": title,
-                "body": summary[:2000],
-                "weight": 0,
-                "source": publisher or link,
-            }
-        )
-
-    return mentions
+    items, _ = news_sources.fetch_news(symbol, allowed_domains)
+    return items
 
 
-def analyze(symbol: str, strict_allowlist: bool = True) -> SentimentRead:
+def analyze(
+    symbol: str,
+    strict_allowlist: bool = True,
+    half_life_days: float = news_signal.DEFAULT_HALF_LIFE_DAYS,
+) -> SentimentRead:
     """Run the full sentiment pipeline for a symbol.
 
-    Sources that are unavailable (no credentials, no matching articles) are
-    reported in `sources_unavailable` rather than raising.
+    News is recency-weighted and its coverage volume is measured separately;
+    Reddit is scored by upvote-weighted average. Sources that are unavailable
+    (no credentials, no matching articles) are reported in `sources_unavailable`
+    rather than raising.
 
-    With strict_allowlist=False, news headlines from outside the allowlisted
-    domains are also counted. That is off by default because SECURITY.md rule 3
-    requires allowlisted sources; enable it knowingly.
+    With strict_allowlist=False, news from outside the allowlisted domains is
+    also counted. That is off by default because SECURITY.md rule 3 requires
+    allowlisted sources; enable it knowingly.
     """
     symbol = symbol.strip().upper()
     config = load_allowed_sources()
@@ -298,22 +266,32 @@ def analyze(symbol: str, strict_allowlist: bool = True) -> SentimentRead:
     reddit_score = score_sentiment(reddit_mentions)
 
     # --- News -------------------------------------------------------------
-    news_mentions = fetch_news_mentions(
+    news_items, news_unavailable = news_sources.fetch_news(
         symbol, news_domains if strict_allowlist else []
     )
-    if not news_mentions:
-        unavailable.append(
-            "news (no headlines from allowlisted domains)"
-            if strict_allowlist
-            else "news (no headlines returned)"
-        )
+    unavailable.extend(news_unavailable)
 
-    news_score = score_sentiment(news_mentions)
+    detail = news_signal.build_news_signal(
+        news_items, score_text, half_life_days=half_life_days
+    )
+    news_score = detail.score
+    provider = news_items[0].provider if news_items else ""
 
     # --- Combine ----------------------------------------------------------
-    sample_size = len(reddit_mentions) + len(news_mentions)
+    sample_size = len(reddit_mentions) + len(news_items)
 
     if sample_size == 0:
+        hints = []
+        if any(u.startswith("tiingo") for u in unavailable):
+            hints.append(
+                "Tiingo needs TIINGO_API_KEY in .env (free key at tiingo.com) "
+                "for dated news with volume tracking."
+            )
+        if any(u.startswith("reddit") for u in unavailable):
+            hints.append(
+                "Reddit needs REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET and "
+                "REDDIT_USER_AGENT in .env to contribute."
+            )
         return SentimentRead(
             symbol=symbol,
             reddit_score=0.0,
@@ -321,19 +299,17 @@ def analyze(symbol: str, strict_allowlist: bool = True) -> SentimentRead:
             sample_size=0,
             signal="unknown",
             sources_unavailable=unavailable,
+            news_detail=detail,
             notes=(
                 f"No sentiment data available for {symbol}. "
                 f"Unavailable: {', '.join(unavailable) or 'none'}."
             ),
-            reasons=[
-                "Reddit needs API credentials in .env (REDDIT_CLIENT_ID, "
-                "REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT) to contribute.",
-            ],
+            reasons=hints,
         )
 
     # Weight each leg by how much evidence it actually carries.
     combined = (
-        reddit_score * len(reddit_mentions) + news_score * len(news_mentions)
+        reddit_score * len(reddit_mentions) + news_score * len(news_items)
     ) / sample_size
 
     if combined > 0.15:
@@ -347,12 +323,20 @@ def analyze(symbol: str, strict_allowlist: bool = True) -> SentimentRead:
         reasons.append(
             f"Reddit: {reddit_score:+.2f} across {len(reddit_mentions)} posts."
         )
-    if news_mentions:
-        reasons.append(
-            f"News: {news_score:+.2f} across {len(news_mentions)} headlines."
-        )
+    reasons.extend(detail.reasons)
     if unavailable:
-        reasons.append(f"Unavailable sources: {', '.join(unavailable)}.")
+        # Keep the reason line readable: name the providers, not their full
+        # error text, which for a missing key is a multi-sentence hint.
+        names = [entry.split(" (", 1)[0] for entry in unavailable]
+        reasons.append(f"Unavailable sources: {', '.join(names)}.")
+
+    notes = (
+        f"Sentiment for {symbol} reads {signal} ({combined:+.2f}) "
+        f"from {sample_size} mentions"
+    )
+    notes += f" via {provider}." if provider else "."
+    if detail.volume.status in ("spike", "quiet"):
+        notes += f" Coverage volume is a {detail.volume.status}."
 
     return SentimentRead(
         symbol=symbol,
@@ -361,11 +345,10 @@ def analyze(symbol: str, strict_allowlist: bool = True) -> SentimentRead:
         sample_size=sample_size,
         signal=signal,
         reddit_sample=len(reddit_mentions),
-        news_sample=len(news_mentions),
+        news_sample=len(news_items),
         sources_unavailable=unavailable,
-        notes=(
-            f"Sentiment for {symbol} reads {signal} ({combined:+.2f}) "
-            f"from {sample_size} mentions."
-        ),
+        notes=notes,
         reasons=reasons,
+        news_detail=detail,
+        news_provider=provider,
     )

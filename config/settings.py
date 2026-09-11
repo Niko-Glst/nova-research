@@ -39,6 +39,24 @@ class NewsApiCredentials:
 
 
 @dataclass(frozen=True)
+class TiingoCredentials:
+    """Credentials for Tiingo's news endpoint (https://www.tiingo.com).
+
+    Note: Tiingo's News API is a paid add-on. A free key authenticates fine for
+    prices and fundamentals but returns HTTP 403 for news.
+    """
+
+    api_key: str
+
+
+@dataclass(frozen=True)
+class FinnhubCredentials:
+    """Credentials for Finnhub's company-news endpoint (https://finnhub.io)."""
+
+    api_key: str
+
+
+@dataclass(frozen=True)
 class BrokerSandboxCredentials:
     """Credentials for a paper/sandbox broker endpoint only.
 
@@ -73,6 +91,16 @@ def get_reddit_credentials() -> RedditCredentials:
 def get_news_api_credentials() -> NewsApiCredentials:
     """Read news API credentials from the environment."""
     return NewsApiCredentials(api_key=_require_env("NEWS_API_KEY"))
+
+
+def get_tiingo_credentials() -> TiingoCredentials:
+    """Read Tiingo API credentials from the environment."""
+    return TiingoCredentials(api_key=_require_env("TIINGO_API_KEY"))
+
+
+def get_finnhub_credentials() -> FinnhubCredentials:
+    """Read Finnhub API credentials from the environment."""
+    return FinnhubCredentials(api_key=_require_env("FINNHUB_API_KEY"))
 
 
 def get_broker_sandbox_credentials() -> BrokerSandboxCredentials:

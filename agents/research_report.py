@@ -277,15 +277,51 @@ def format_report(report: ResearchReport) -> str:
     if report.sentiment is not None:
         sentiment = report.sentiment
         lines += ["-" * width, f"  SENTIMENT -> {sentiment.signal.upper()}", "-" * width]
+        provider = f" via {sentiment.news_provider}" if sentiment.news_provider else ""
         lines += [
             f"  News score:       {sentiment.news_score:>+8.2f} "
-            f"({sentiment.news_sample} headlines)",
+            f"({sentiment.news_sample} articles{provider})",
             f"  Reddit score:     {sentiment.reddit_score:>+8.2f} "
             f"({sentiment.reddit_sample} posts)",
-            "",
         ]
+
+        detail = sentiment.news_detail
+        if detail is not None and detail.article_count:
+            volume = detail.volume
+            lines += [
+                f"  Unweighted:       {detail.unweighted_score:>+8.2f} "
+                f"(before recency weighting)",
+                f"  Effective sample: {detail.effective_sample:>8.1f} "
+                f"(weight-adjusted article count)",
+                "",
+                f"  COVERAGE VOLUME -> {volume.status.upper()}",
+            ]
+            if volume.status != "unknown":
+                ratio = "inf" if volume.ratio == float("inf") else f"{volume.ratio:.2f}x"
+                lines += [
+                    f"    last {volume.recent_window_days}d:   "
+                    f"{volume.recent_count:>3} articles "
+                    f"({volume.recent_per_day:.2f}/day)",
+                    f"    baseline:  {volume.baseline_count:>3} articles "
+                    f"({volume.baseline_per_day:.2f}/day)",
+                    f"    ratio:     {ratio}",
+                ]
+            if detail.top_positive:
+                lines += ["", "    Most positive:"]
+                lines += [f"      + {title[:62]}" for title in detail.top_positive]
+            if detail.top_negative:
+                lines += ["", "    Most negative:"]
+                lines += [f"      - {title[:62]}" for title in detail.top_negative]
+
+        lines.append("")
         for reason in sentiment.reasons:
             lines.append(f"    - {reason}")
+        if sentiment.sources_unavailable:
+            lines += ["", "    Sources not used:"]
+            for entry in sentiment.sources_unavailable:
+                name, _, detail = entry.partition(" (")
+                reason = detail.rstrip(")").split(".")[0] if detail else "unavailable"
+                lines.append(f"      {name}: {reason}")
         lines.append("")
 
     # --- Errors -----------------------------------------------------------
