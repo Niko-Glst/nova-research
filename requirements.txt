@@ -6,7 +6,6 @@ numpy>=1.24
 
 # Market data & technical analysis
 yfinance>=0.2
-pandas-ta>=0.3
 
 # Reddit sentiment
 praw>=7.7
@@ -19,6 +18,9 @@ praw>=7.7
 # event-driven loop would be noticeably slower for that use case. Using the
 # free/OSS vectorbt, not vectorbt PRO.
 vectorbt>=0.26
+
+# NOTE: pandas-ta is intentionally NOT used. It is unmaintained and breaks on
+# numpy 2.x; ta_analyst.py computes RSI/MACD/SMA directly in pandas instead.
 
 # Dev / quality
 pytest>=7.0

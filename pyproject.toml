@@ -15,7 +15,6 @@ dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",
     "yfinance>=0.2",
-    "pandas-ta>=0.3",
     "praw>=7.7",
     "vectorbt>=0.26",
 ]
@@ -28,7 +27,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agents*", "backtests*", "config*"]
+include = ["agents*", "backtests*", "config*", "common*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

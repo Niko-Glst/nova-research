@@ -9,9 +9,25 @@ subreddits:
   - investing
   - stocks
 
+# Vetted financial publishers. A headline is counted only if its URL or
+# publisher name matches one of these (see sentiment_analyst.fetch_news_mentions).
+# reuters.com and bloomberg.com rarely appear in yfinance's feed directly, so the
+# aggregators that do carry it are listed alongside them.
 news_domains:
   - reuters.com
   - bloomberg.com
+  - finance.yahoo.com
+  - yahoo finance
+  - wsj.com
+  - wall street journal
+  - investors.com
+  - investor's business daily
+  - thestreet.com
+  - cnbc.com
+  - marketwatch.com
+  - barrons.com
+  - fool.com
+  - seekingalpha.com
 
 rss_feeds:
   - name: example_macro_feed
@@ -22,3 +38,39 @@ rss_feeds:
 rate_limits:
   requests_per_minute: 30
   min_seconds_between_requests: 2
+
+# Peer groups for fundamental comparison (fa_analyst.py).
+#
+# yfinance exposes no reliable peer/competitor endpoint, so niches are declared
+# explicitly here. Keys are matched against a ticker's yfinance "industry"
+# field (lowercased, non-alphanumerics collapsed to underscores); if a symbol's
+# industry has no entry below, fa_analyst falls back to `default_peers_by_sector`
+# and reports that the comparison is sector-level rather than niche-level.
+peer_groups:
+  consumer_electronics: [AAPL, SONY, HPQ, DELL, LOGI]
+  software_infrastructure: [MSFT, ORCL, CRM, ADBE, NOW, VMW]
+  software_application: [CRM, NOW, INTU, ADSK, WDAY, TEAM]
+  semiconductors: [NVDA, AMD, INTC, AVGO, QCOM, TXN, MU]
+  internet_content_information: [GOOGL, META, NFLX, PINS, SNAP]
+  internet_retail: [AMZN, BABA, EBAY, ETSY, CHWY]
+  auto_manufacturers: [TSLA, F, GM, RIVN, LCID, TM]
+  banks_diversified: [JPM, BAC, WFC, C, HSBC]
+  drug_manufacturers_general: [JNJ, PFE, MRK, ABBV, LLY, BMY]
+  discount_stores: [WMT, COST, TGT, DG, DLTR]
+  credit_services: [V, MA, AXP, PYPL, COF]
+  aerospace_defense: [BA, LMT, RTX, NOC, GD]
+  oil_gas_integrated: [XOM, CVX, SHEL, BP, TTE]
+
+default_peers_by_sector:
+  technology: [AAPL, MSFT, NVDA, GOOGL, AVGO]
+  healthcare: [JNJ, LLY, UNH, MRK, ABBV]
+  financial_services: [JPM, V, MA, BAC, WFC]
+  consumer_cyclical: [AMZN, TSLA, HD, MCD, NKE]
+  consumer_defensive: [WMT, COST, PG, KO, PEP]
+  communication_services: [GOOGL, META, NFLX, DIS, T]
+  energy: [XOM, CVX, COP, SLB, EOG]
+  industrials: [CAT, BA, HON, UNP, GE]
+
+# Maximum peers to fetch per comparison. Each peer costs one rate-limited
+# request, so this caps how slow a single analysis can get.
+max_peers: 6
