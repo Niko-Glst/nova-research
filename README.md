@@ -101,6 +101,44 @@ Negative multiples are excluded on both sides of the comparison: a loss-making
 company has no P/E, and treating one as "below the median" would read a loss as
 a discount.
 
+## Backtesting and signal validation
+
+```powershell
+# Does a strategy beat buy-and-hold?
+python -c "from agents.ta_analyst import fetch_price_history; from agents.strategy_agent import moving_average_crossover; from backtests.backtest_engine import run_backtest; h = fetch_price_history('AAPL', period='5y'); s = moving_average_crossover(h, 'AAPL'); print(run_backtest(h, s.entries, s.exits, fees_bps=10, symbol='AAPL').summary())"
+
+# Do the analyst signals relate to realised returns at all?
+python scripts/run_signal_study.py --csv reports/signal_study.csv
+```
+
+The backtest **shifts every signal one bar** before trading and charges fees on
+both sides, and it always reports buy-and-hold next to the strategy. Those three
+choices are what stop a backtest from flattering itself.
+
+Monte Carlo resamples the strategy's own returns to show the distribution it
+could plausibly have produced. The useful number is where the realised backtest
+sits in that distribution: a result at the 95th percentile of its own resampling
+was a favourable draw, not evidence of skill.
+
+### What the signal study found
+
+Over 24 symbols and a 63-day return window — **descriptive, not predictive**,
+for the reasons the module documents:
+
+| Signal | Correlation | p | Current weight |
+|---|---|---|---|
+| technical | 0.72 | 0.0001 | 0.8 |
+| fundamental | 0.45 | 0.028 | 1.0 |
+| insider | −0.33 | 0.15 | 0.6 |
+| sentiment | 0.02 | 0.94 | 0.4 |
+
+Technical is the only signal that survives a multivariate fit; sentiment is
+indistinguishable from noise. **The weights have deliberately not been changed
+on this basis** — 24 symbols at one moment in time, with signals computed today
+and paired with past returns, is not grounds for retuning. A genuine test needs
+point-in-time snapshots taken before the return period, which this project does
+not yet store.
+
 ## Module flow
 
 Data flows through the pipeline roughly in this order:

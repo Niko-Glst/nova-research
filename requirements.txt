@@ -10,14 +10,11 @@ yfinance>=0.2
 # Reddit sentiment
 praw>=7.7
 
-# Backtesting: vectorbt chosen over backtrader.
-# Rationale: this pipeline's strategy/risk agents naturally produce vectorized
-# signal arrays (entries/exits, sizes) per asset, and monte_carlo.py needs many
-# fast repeated simulations (return resampling, parameter sweeps). vectorbt is
-# numpy/numba-vectorized, so those repeated runs stay fast; backtrader's
-# event-driven loop would be noticeably slower for that use case. Using the
-# free/OSS vectorbt, not vectorbt PRO.
-vectorbt>=0.26
+# Backtesting: implemented directly in numpy (backtests/backtest_engine.py).
+# vectorbt was the original choice, but it fails to import against plotly 7
+# and pulls numba/llvmlite, which routinely fail to build on current Python.
+# A long-only vectorized simulation is a few dozen lines of numpy, so the
+# dependency bought little.
 
 # NOTE: pandas-ta is intentionally NOT used. It is unmaintained and breaks on
 # numpy 2.x; ta_analyst.py computes RSI/MACD/SMA directly in pandas instead.
