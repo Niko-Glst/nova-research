@@ -1,0 +1,29 @@
+# Core
+python-dotenv>=1.0
+pyyaml>=6.0
+pandas>=2.0
+numpy>=1.24
+
+# Market data & technical analysis
+yfinance>=0.2
+pandas-ta>=0.3
+
+# Reddit sentiment
+praw>=7.7
+
+# Backtesting: vectorbt chosen over backtrader.
+# Rationale: this pipeline's strategy/risk agents naturally produce vectorized
+# signal arrays (entries/exits, sizes) per asset, and monte_carlo.py needs many
+# fast repeated simulations (return resampling, parameter sweeps). vectorbt is
+# numpy/numba-vectorized, so those repeated runs stay fast; backtrader's
+# event-driven loop would be noticeably slower for that use case. Using the
+# free/OSS vectorbt, not vectorbt PRO.
+vectorbt>=0.26
+
+# Dev / quality
+pytest>=7.0
+pre-commit>=3.0
+detect-secrets>=1.4
+
+# NOTE: Playwright is intentionally NOT listed here. Browser automation runs
+# via the separate Playwright MCP server, not as a Python dependency of this repo.

@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nova-research"
+version = "0.1.0"
+description = "Investment research pipeline (paper/simulation only, not financial advice)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = [
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "yfinance>=0.2",
+    "pandas-ta>=0.3",
+    "praw>=7.7",
+    "vectorbt>=0.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pre-commit>=3.0",
+    "detect-secrets>=1.4",
+]
+
+[tool.setuptools.packages.find]
+include = ["agents*", "backtests*", "config*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]

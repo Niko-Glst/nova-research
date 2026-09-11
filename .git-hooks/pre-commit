@@ -1,0 +1,42 @@
+#!/bin/sh
+# Fallback secret-scan pre-commit hook, for anyone who hasn't run
+# `pre-commit install` (which wires up detect-secrets instead — prefer that).
+#
+# Enable this hook with:
+#   git config core.hooksPath .git-hooks
+#
+# Blocks the commit if a staged file looks like it contains a secret: a long
+# alphanumeric string near a word like "key", "token", or "secret".
+
+set -eu
+
+staged_files=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [ -z "$staged_files" ]; then
+    exit 0
+fi
+
+pattern='(api[_-]?key|secret|token|password|passwd|client[_-]?secret)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_\-]{16,}'
+
+found=0
+for f in $staged_files; do
+    # Skip files that don't exist (e.g. deletions) or are themselves ignore/example files.
+    case "$f" in
+        .env.example|*.md|.pre-commit-config.yaml|.secrets.baseline) continue ;;
+    esac
+    if [ -f "$f" ]; then
+        if git show ":$f" | grep -Eiq "$pattern"; then
+            echo "Potential secret found in staged file: $f" >&2
+            found=1
+        fi
+    fi
+done
+
+if [ "$found" -ne 0 ]; then
+    echo "" >&2
+    echo "Commit blocked: possible secret detected above. Remove it, use .env instead," >&2
+    echo "and see SECURITY.md if a real secret was already committed anywhere." >&2
+    exit 1
+fi
+
+exit 0

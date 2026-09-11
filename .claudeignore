@@ -1,0 +1,29 @@
+# Files Claude Code should never read into a session, mirrors .gitignore's
+# sensitive patterns. .gitignore keeps these out of git; this keeps them out
+# of Claude's context entirely.
+
+.env
+.env.*
+!.env.example
+
+data/raw/
+data/processed/
+
+*.log
+logs/
+
+*secret*
+*Secret*
+*SECRET*
+*credential*
+*Credential*
+*CREDENTIAL*
+*key*
+*Key*
+*KEY*
+!config/allowed_sources.yaml
+!agents/*.py
+!requirements.txt
+!pyproject.toml
+
+.secrets.baseline

@@ -1,0 +1,24 @@
+# Explicit allowlist of external sources this project may fetch from.
+#
+# Any module that touches Reddit, news, RSS, or (via the Playwright MCP server)
+# a browser MUST read its permitted sources from this file rather than
+# accepting/scraping arbitrary URLs. Add new sources here first, then use them.
+
+subreddits:
+  - wallstreetbets
+  - investing
+  - stocks
+
+news_domains:
+  - reuters.com
+  - bloomberg.com
+
+rss_feeds:
+  - name: example_macro_feed
+    url: https://example.com/rss/macro.xml  # placeholder — replace with a real, vetted feed
+
+# Rate limiting defaults applied when fetching from the sources above.
+# Individual modules may override these but must not remove them.
+rate_limits:
+  requests_per_minute: 30
+  min_seconds_between_requests: 2

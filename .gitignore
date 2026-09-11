@@ -1,0 +1,63 @@
+# --- Secrets & environment ---
+.env
+.env.*
+!.env.example
+*secret*
+*Secret*
+*SECRET*
+*credential*
+*Credential*
+*CREDENTIAL*
+*key*
+*Key*
+*KEY*
+!config/allowed_sources.yaml
+!agents/*.py
+!requirements.txt
+!pyproject.toml
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.Python
+*.so
+
+# --- Data (never commit raw/processed data) ---
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Notebooks ---
+notebooks/.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Editors / IDE ---
+.vscode/
+.idea/
+
+# --- Testing / coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- detect-secrets baseline is tracked on purpose (not ignored) ---
