@@ -73,6 +73,10 @@ class PeerComparison:
     relative: dict[str, float]  # metric -> symbol / peer_median
     verdict: str  # "cheap" / "expensive" / "in-line" / "unknown"
     notes: str
+    # Per-ticker values, kept so a chart can show each peer rather than only the
+    # median: {metric: {ticker: value}}. The subject's own value lives in
+    # symbol_metrics, not here. Defaulted, so it must follow the required fields.
+    peer_values: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -230,8 +234,13 @@ def compare_to_peers(symbol: str, metrics: dict[str, float]) -> PeerComparison:
             ),
         )
 
-    comparable = list(_LOWER_IS_CHEAPER) + list(_HIGHER_IS_BETTER)
+    # trailing_eps is compared and charted but deliberately kept out of both
+    # _LOWER_IS_CHEAPER and _HIGHER_IS_BETTER: EPS is not comparable across
+    # companies as a valuation judgment (it scales with share count), so it
+    # informs the reader without moving the verdict.
+    comparable = list(_LOWER_IS_CHEAPER) + list(_HIGHER_IS_BETTER) + ["trailing_eps"]
     collected: dict[str, list[float]] = {name: [] for name in comparable}
+    per_ticker: dict[str, dict[str, float]] = {name: {} for name in comparable}
     used: list[str] = []
 
     for peer in peers:
@@ -245,6 +254,7 @@ def compare_to_peers(symbol: str, metrics: dict[str, float]) -> PeerComparison:
             value = peer_metrics.get(name)
             if _is_comparable(name, value):
                 collected[name].append(float(value))
+                per_ticker[name][peer] = float(value)
 
     if not used:
         return PeerComparison(
@@ -312,6 +322,7 @@ def compare_to_peers(symbol: str, metrics: dict[str, float]) -> PeerComparison:
         symbol_metrics=symbol_metrics,
         peer_medians=peer_medians,
         relative=relative,
+        peer_values={k: v for k, v in per_ticker.items() if v},
         verdict=verdict,
         notes=notes,
     )

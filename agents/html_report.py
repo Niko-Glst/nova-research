@@ -15,6 +15,12 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass
 
+from agents.charts import (
+    PeerBar,
+    equity_curve_chart,
+    monte_carlo_histogram,
+    peer_metric_chart,
+)
 from agents.research_report import ResearchReport
 
 # Metric display names, so the page does not show raw snake_case keys.
@@ -474,6 +480,155 @@ def _sentiment_section(report: ResearchReport) -> str:
     </section>"""
 
 
+def _eps_peer_section(report: ResearchReport) -> str:
+    """Per-peer bars for EPS and the headline valuation multiples.
+
+    The relative chart elsewhere shows this company against a median; this shows
+    the individual peers, which is what reveals whether that median is a tight
+    cluster or an average of extremes.
+    """
+    fundamental = report.fundamental
+    if fundamental is None or fundamental.peer_comparison is None:
+        return ""
+
+    peers = fundamental.peer_comparison
+    if not peers.peer_values:
+        return ""
+
+    charts: list[str] = []
+    specs = [
+        ("trailing_eps", "Trailing EPS", "{:.2f}"),
+        ("forward_pe", "Forward P/E", "{:.1f}"),
+        ("profit_margin", "Net margin", "{:.1%}"),
+        ("revenue_growth", "Revenue growth", "{:.1%}"),
+    ]
+
+    for metric, title, fmt in specs:
+        values = peers.peer_values.get(metric)
+        own = peers.symbol_metrics.get(metric)
+        if own is None:
+            own = fundamental.metrics.get(metric)
+        if not values or own is None:
+            continue
+
+        bars = [PeerBar(label=report.symbol, value=float(own), is_subject=True)]
+        bars += [
+            PeerBar(label=ticker, value=float(value), is_subject=False)
+            for ticker, value in sorted(values.items(), key=lambda kv: -kv[1])
+        ]
+        charts.append(
+            '<div class="chart-block">'
+            + peer_metric_chart(bars, title, fmt, peers.peer_medians.get(metric))
+            + "</div>"
+        )
+
+    if not charts:
+        return ""
+
+    return f"""
+    <section class="card">
+      <h2>Peer detail &mdash; {_esc(peers.niche)}</h2>
+      <p class="muted-text">Each peer individually, with {_esc(report.symbol)}
+         highlighted. A median hides whether the group is a tight cluster or an
+         average of extremes; these bars show which.</p>
+      <div class="chart-grid">{"".join(charts)}</div>
+    </section>"""
+
+
+def _simulation_section(report: ResearchReport) -> str:
+    """Backtest result, equity curve against buy-and-hold, and the MC histogram."""
+    backtest = report.backtest
+    if backtest is None:
+        return ""
+
+    verdict_tone = "good" if backtest.beats_buy_and_hold else "bad"
+    verdict_text = (
+        "beats buy &amp; hold" if backtest.beats_buy_and_hold else "trails buy &amp; hold"
+    )
+
+    stats = "".join(
+        f'<div class="stat"><span class="stat-label">{label}</span>'
+        f'<span class="stat-value">{value}</span></div>'
+        for label, value in [
+            ("Strategy", f"{backtest.total_return_pct:+.1f}%"),
+            ("Buy &amp; hold", f"{backtest.buy_and_hold_return_pct:+.1f}%"),
+            ("Annualized", f"{backtest.annualized_return_pct:+.1f}%"),
+            ("Max drawdown", f"{backtest.max_drawdown_pct:.1f}%"),
+            ("Sharpe", f"{backtest.sharpe_ratio:.2f}"),
+            ("Trades", f"{backtest.num_trades}"),
+            ("Win rate", f"{backtest.win_rate_pct:.0f}%"),
+            ("In market", f"{backtest.time_in_market_pct:.0f}%"),
+        ]
+    )
+
+    equity_block = ""
+    if backtest.equity_curve is not None and report.buy_hold_equity is not None:
+        equity_block = (
+            "<h3>Strategy versus buy &amp; hold</h3>"
+            + equity_curve_chart(
+                backtest.equity_curve.to_numpy(), report.buy_hold_equity
+            )
+        )
+
+    mc_block = ""
+    simulation = report.monte_carlo
+    if simulation is not None and report.simulated_returns is not None:
+        percentile_note = ""
+        if simulation.observed_percentile is not None:
+            where = simulation.observed_percentile
+            if where > 90:
+                judgement = (
+                    "in the top decile of its own resampling, so treat the "
+                    "backtest as a favourable draw rather than an expectation"
+                )
+            elif where < 10:
+                judgement = "in the bottom decile: the realised path was a poor draw"
+            else:
+                judgement = "near the middle: the realised path was typical"
+            percentile_note = (
+                '<p class="muted-text">The realised backtest sits at percentile '
+                f"<strong>{where:.0f}</strong> of this distribution &mdash; {judgement}.</p>"
+            )
+
+        mc_stats = "".join(
+            f'<div class="stat"><span class="stat-label">{label}</span>'
+            f'<span class="stat-value">{value}</span></div>'
+            for label, value in [
+                ("Median (p50)", f"{simulation.return_percentiles.get('p50', 0):+.1f}%"),
+                ("p5", f"{simulation.return_percentiles.get('p5', 0):+.1f}%"),
+                ("p95", f"{simulation.return_percentiles.get('p95', 0):+.1f}%"),
+                ("P(loss)", f"{simulation.probability_of_loss:.0%}"),
+                ("P(DD &gt; 20%)", f"{simulation.probability_of_drawdown_20pct:.0%}"),
+                ("CVaR 5%", f"{simulation.conditional_var_5pct:.1f}%"),
+            ]
+        )
+
+        histogram = monte_carlo_histogram(
+            report.simulated_returns,
+            observed=simulation.observed_return_pct,
+            percentiles=simulation.return_percentiles,
+        )
+
+        mc_block = f"""
+        <h3>Monte Carlo &mdash; {simulation.num_simulations:,} resampled paths</h3>
+        <p class="muted-text">The backtest gives one path: the one that happened.
+           Resampling its returns shows the distribution it could plausibly have
+           produced over a {simulation.horizon_days}-day horizon.</p>
+        <div class="stats">{mc_stats}</div>
+        {histogram}
+        {percentile_note}"""
+
+    return f"""
+    <section class="card">
+      <h2>Backtest <span class="pill {verdict_tone}">{verdict_text}</span></h2>
+      <p class="muted-text">50/200-day crossover, 10bps per side, signals shifted
+         one bar so they are traded after they are observed. Simulation only.</p>
+      <div class="stats">{stats}</div>
+      {equity_block}
+      {mc_block}
+    </section>"""
+
+
 _STYLE = """
 :root {
   --bg: #f6f7f9; --card: #ffffff; --ink: #1a1d21; --muted: #6b7280;
@@ -545,6 +700,32 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .bar.warn { fill: #d09000; }
 footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 26px; }
 @media (max-width: 620px) { .swot { grid-template-columns: 1fr; } }
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.chart-block { min-width: 0; }
+.chart-title { font-size: 12px; font-weight: 600; fill: var(--ink); }
+.median-line { stroke: #9aa0a6; stroke-width: 1; stroke-dasharray: 3 3; }
+.bar.subject { fill: #1f4fd8; }
+.bar.pos { fill: #7c9cc4; }
+.bar.neg { fill: #d09a96; }
+.bar-label.subject { font-weight: 700; fill: #1f4fd8; }
+.mc-chart, .equity-chart { width: 100%; height: auto; margin: 10px 0; }
+.hist.pos { fill: var(--good); opacity: 0.72; }
+.hist.neg { fill: var(--bad); opacity: 0.72; }
+.marker { stroke-width: 1.5; }
+.marker.zero { stroke: #6b7280; stroke-dasharray: 3 3; }
+.marker.p5 { stroke: var(--bad); }
+.marker.observed { stroke: #1f4fd8; }
+.marker-label { font-size: 10px; font-weight: 600; }
+.marker-label.zero { fill: #6b7280; }
+.marker-label.p5 { fill: var(--bad); }
+.marker-label.observed { fill: #1f4fd8; }
+.curve { fill: none; stroke-width: 1.8; }
+.curve.strategy { stroke: #1f4fd8; }
+.curve.buyhold { stroke: #9aa0a6; stroke-dasharray: 4 3; }
+.curve-label { font-size: 11px; font-weight: 600; }
+.curve-label.strategy { fill: #1f4fd8; }
+.curve-label.buyhold { fill: #6b7280; }
+@media (max-width: 620px) { .chart-grid { grid-template-columns: 1fr; } }
 """
 
 
@@ -591,6 +772,8 @@ def render_report(report: ResearchReport, generated_at: str = "") -> str:
 {_thesis_section(report)}
 {_swot_section(report)}
 {_peer_section(report)}
+{_eps_peer_section(report)}
+{_simulation_section(report)}
 {_fundamentals_section(report)}
 {_technical_section(report)}
 {_insider_section(report)}

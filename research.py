@@ -72,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
         "(default: reports/) and open it in the browser.",
     )
     parser.add_argument(
+        "--simulate",
+        action="store_true",
+        help="Run a backtest and Monte Carlo simulation, and chart them "
+        "(refetches a 5-year price history).",
+    )
+    parser.add_argument(
         "--no-open",
         action="store_true",
         help="With --html, write the file but do not open a browser.",
@@ -103,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_peers=not args.no_peers,
                 insider_lookback_days=args.insider_days,
                 strict_allowlist=not args.any_news_source,
+                run_simulation=args.simulate,
             )
         except Exception as exc:
             failed = True

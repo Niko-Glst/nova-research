@@ -23,8 +23,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from agents import fa_analyst, insider_analyst, sentiment_analyst, swot as swot_module
+from agents import fa_analyst, insider_analyst, sentiment_analyst, strategy_agent
+from agents import swot as swot_module
 from agents import ta_analyst, thesis as thesis_module
+from backtests import backtest_engine, monte_carlo
 
 # How much each leg counts toward the combined score.
 WEIGHTS = {
@@ -65,6 +67,12 @@ class ResearchReport:
     summary: str = ""
     thesis: thesis_module.Thesis | None = None
     swot: swot_module.Swot | None = None
+    backtest: backtest_engine.BacktestResult | None = None
+    monte_carlo: monte_carlo.MonteCarloResult | None = None
+    # Terminal returns from the simulation, kept for the histogram. Excluded
+    # from repr: this is thousands of floats.
+    simulated_returns: object = field(default=None, repr=False)
+    buy_hold_equity: object = field(default=None, repr=False)
 
 
 def _stance_value(stance: str | None) -> float | None:
@@ -80,6 +88,9 @@ def analyze(
     include_peers: bool = True,
     insider_lookback_days: int = insider_analyst.DEFAULT_LOOKBACK_DAYS,
     strict_allowlist: bool = True,
+    run_simulation: bool = False,
+    backtest_period: str = "5y",
+    num_simulations: int = 2000,
 ) -> ResearchReport:
     """Run every analyst for a symbol and combine their verdicts.
 
@@ -115,6 +126,41 @@ def analyze(
         insider = insider_analyst.analyze(symbol, lookback_days=insider_lookback_days)
     except Exception as exc:
         errors["insider"] = f"{type(exc).__name__}: {exc}"
+
+    # --- Backtest and simulation (opt-in: it refetches a longer history) ---
+    backtest_result = None
+    simulation = None
+    simulated = None
+    buy_hold = None
+    if run_simulation:
+        try:
+            history = ta_analyst.fetch_price_history(symbol, period=backtest_period)
+            signals = strategy_agent.moving_average_crossover(history, symbol=symbol)
+            backtest_result = backtest_engine.run_backtest(
+                history, signals.entries, signals.exits, fees_bps=10, symbol=symbol
+            )
+
+            import numpy as _np
+
+            equity = backtest_result.equity_curve.to_numpy()
+            closes = history["Close"].astype(float).to_numpy()
+            buy_hold = closes / closes[0]
+
+            strategy_returns = _np.diff(equity) / equity[:-1]
+            if strategy_returns.size > 2 and strategy_returns.std() > 0:
+                simulation = monte_carlo.run_monte_carlo(
+                    symbol,
+                    strategy_returns,
+                    num_simulations=num_simulations,
+                    observed_return_pct=backtest_result.annualized_return_pct,
+                    seed=42,
+                )
+                paths = monte_carlo.resample_returns(
+                    strategy_returns, num_simulations, 252, seed=42
+                )
+                simulated = (_np.cumprod(1.0 + paths, axis=1)[:, -1] - 1.0) * 100.0
+        except Exception as exc:
+            errors["backtest"] = f"{type(exc).__name__}: {exc}"
 
     # --- Combine ----------------------------------------------------------
     legs = {
@@ -171,6 +217,10 @@ def analyze(
         swot=swot_module.build_swot(
             symbol, fundamental, technical, insider, sentiment
         ),
+        backtest=backtest_result,
+        monte_carlo=simulation,
+        simulated_returns=simulated,
+        buy_hold_equity=buy_hold,
     )
 
 
