@@ -226,6 +226,11 @@ def fetch_finnhub_news(
         if not isinstance(article, dict):
             continue
         source = str(article.get("source") or "")
+        # Finnhub returns its own redirect URL (finnhub.io/api/news?id=...)
+        # rather than the publisher's link; there is no direct-URL field in the
+        # company-news payload. The redirect resolves to the real article, so
+        # the report links it as-is. This also means the allowlist has to match
+        # on `source` for Finnhub items, since the URL is always finnhub.io.
         url = str(article.get("url") or "")
         if not _matches_allowlist(f"{url} {source}", allowed_domains):
             continue

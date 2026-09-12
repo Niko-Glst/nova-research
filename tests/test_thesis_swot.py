@@ -255,3 +255,131 @@ class TestHtmlRendering:
         svg = _score_gauge_svg(score)
         assert svg.startswith("<svg")
         assert "</svg>" in svg
+
+    def test_page_carries_the_author_branding(self):
+        from agents.html_report import render_report
+        from agents.research_report import ResearchReport
+
+        html = render_report(
+            ResearchReport(symbol="TEST", verdict="mixed", score=0.0, confidence=0.5)
+        )
+        assert "NIKOLAY GELSHTEIN" in html
+        assert "Nikolay Gelshtein" in html  # title and footer
+
+    def test_no_double_dashes_in_rendered_prose(self):
+        """Visible copy uses em dashes; ' -- ' must not reach the page.
+
+        CSS custom properties (--bg) are excluded: there the dashes are syntax.
+        """
+        from agents.html_report import render_report
+        from agents.research_report import ResearchReport
+
+        html = render_report(
+            ResearchReport(symbol="TEST", verdict="mixed", score=0.0, confidence=0.5)
+        )
+        body = html.split("</style>", 1)[-1]
+        assert " -- " not in body
+
+    def test_headlines_render_as_links(self):
+        from agents.html_report import _sentiment_section
+        from agents.news_signal import Headline, NewsSignal, VolumeRead
+        from agents.research_report import ResearchReport
+        from agents.sentiment_analyst import SentimentRead
+
+        volume = VolumeRead(
+            recent_count=0, recent_window_days=3, baseline_count=0,
+            baseline_window_days=30, recent_per_day=0.0, baseline_per_day=0.0,
+            ratio=1.0, status="unknown", notes="",
+        )
+        detail = NewsSignal(
+            score=0.4, unweighted_score=0.4, article_count=1, dated_count=1,
+            effective_sample=1.0, volume=volume,
+            top_positive=[
+                Headline(
+                    title="Stock surges on record profit",
+                    url="https://example.com/story",
+                    source="Reuters",
+                    score=0.8,
+                    age_days=0.4,
+                )
+            ],
+        )
+        report = ResearchReport(
+            symbol="TEST", verdict="positive", score=0.5, confidence=1.0,
+            sentiment=SentimentRead(
+                symbol="TEST", reddit_score=0.0, news_score=0.4, sample_size=1,
+                notes="", signal="bullish", news_sample=1, news_detail=detail,
+            ),
+        )
+
+        html = _sentiment_section(report)
+        assert 'href="https://example.com/story"' in html
+        assert 'rel="noopener noreferrer"' in html
+        assert "Reuters" in html
+
+    def test_headline_without_url_still_renders(self):
+        """A provider may omit the link; the title must survive regardless."""
+        from agents.html_report import _sentiment_section
+        from agents.news_signal import Headline, NewsSignal, VolumeRead
+        from agents.research_report import ResearchReport
+        from agents.sentiment_analyst import SentimentRead
+
+        volume = VolumeRead(
+            recent_count=0, recent_window_days=3, baseline_count=0,
+            baseline_window_days=30, recent_per_day=0.0, baseline_per_day=0.0,
+            ratio=1.0, status="unknown", notes="",
+        )
+        detail = NewsSignal(
+            score=-0.4, unweighted_score=-0.4, article_count=1, dated_count=0,
+            effective_sample=1.0, volume=volume,
+            top_negative=[
+                Headline(title="Shares plunge", url="", source="", score=-0.8)
+            ],
+        )
+        report = ResearchReport(
+            symbol="TEST", verdict="negative", score=-0.5, confidence=1.0,
+            sentiment=SentimentRead(
+                symbol="TEST", reddit_score=0.0, news_score=-0.4, sample_size=1,
+                notes="", signal="bearish", news_sample=1, news_detail=detail,
+            ),
+        )
+
+        html = _sentiment_section(report)
+        assert "Shares plunge" in html
+        assert "<a href" not in html
+
+    def test_headline_markup_is_escaped(self):
+        """Titles and URLs come from an external feed: treat both as untrusted."""
+        from agents.html_report import _sentiment_section
+        from agents.news_signal import Headline, NewsSignal, VolumeRead
+        from agents.research_report import ResearchReport
+        from agents.sentiment_analyst import SentimentRead
+
+        volume = VolumeRead(
+            recent_count=0, recent_window_days=3, baseline_count=0,
+            baseline_window_days=30, recent_per_day=0.0, baseline_per_day=0.0,
+            ratio=1.0, status="unknown", notes="",
+        )
+        detail = NewsSignal(
+            score=0.4, unweighted_score=0.4, article_count=1, dated_count=1,
+            effective_sample=1.0, volume=volume,
+            top_positive=[
+                Headline(
+                    title="<script>alert(1)</script>",
+                    url='" onmouseover="alert(1)',
+                    source="x",
+                    score=0.8,
+                )
+            ],
+        )
+        report = ResearchReport(
+            symbol="TEST", verdict="positive", score=0.5, confidence=1.0,
+            sentiment=SentimentRead(
+                symbol="TEST", reddit_score=0.0, news_score=0.4, sample_size=1,
+                notes="", signal="bullish", news_sample=1, news_detail=detail,
+            ),
+        )
+
+        html = _sentiment_section(report)
+        assert "<script>" not in html
+        assert ' onmouseover="' not in html

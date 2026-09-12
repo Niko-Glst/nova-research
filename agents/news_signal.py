@@ -73,6 +73,17 @@ class VolumeRead:
 
 
 @dataclass(frozen=True)
+class Headline:
+    """A scored headline, kept with its link so the report can cite the source."""
+
+    title: str
+    url: str
+    source: str
+    score: float
+    age_days: float | None = None
+
+
+@dataclass(frozen=True)
 class NewsSignal:
     """The combined news read: weighted sentiment plus coverage volume."""
 
@@ -82,8 +93,8 @@ class NewsSignal:
     dated_count: int
     effective_sample: float  # sum of weights: how much evidence this really is
     volume: VolumeRead
-    top_positive: list[str] = field(default_factory=list)
-    top_negative: list[str] = field(default_factory=list)
+    top_positive: list[Headline] = field(default_factory=list)
+    top_negative: list[Headline] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
 
 
@@ -249,7 +260,7 @@ def analyze_volume(
             status="normal",
             notes=(
                 f"Coverage rate is {ratio:.1f}x baseline, but on only "
-                f"{recent_count} recent article(s) -- too thin to call a spike."
+                f"{recent_count} recent article(s): too thin to call a spike."
             ),
         )
 
@@ -344,8 +355,17 @@ def build_news_signal(
     unweighted = plain_total / len(items)
 
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    top_positive = [item.title for score, item in scored[:3] if score > 0]
-    top_negative = [item.title for score, item in reversed(scored[-3:]) if score < 0]
+    def _headline(score: float, item) -> Headline:
+        return Headline(
+            title=item.title,
+            url=item.url,
+            source=item.source,
+            score=score,
+            age_days=item.age_days,
+        )
+
+    top_positive = [_headline(s, i) for s, i in scored[:3] if s > 0]
+    top_negative = [_headline(s, i) for s, i in reversed(scored[-3:]) if s < 0]
 
     dated_count = sum(1 for item in items if item.published is not None)
 

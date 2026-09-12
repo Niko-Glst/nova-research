@@ -464,9 +464,37 @@ def _sentiment_section(report: ResearchReport) -> str:
 
     headlines = ""
     if detail is not None and (detail.top_positive or detail.top_negative):
-        pos = "".join(f'<li class="good">{_esc(t)}</li>' for t in detail.top_positive)
-        neg = "".join(f'<li class="bad">{_esc(t)}</li>' for t in detail.top_negative)
-        headlines = f'<h3>Headlines</h3><ul class="headlines">{pos}{neg}</ul>'
+
+        def _headline_item(headline, tone: str) -> str:
+            meta_parts = []
+            if headline.source:
+                meta_parts.append(_esc(headline.source))
+            if headline.age_days is not None:
+                meta_parts.append(
+                    "today" if headline.age_days < 1 else f"{headline.age_days:.0f}d ago"
+                )
+            meta = (
+                f'<span class="headline-meta">{" &middot; ".join(meta_parts)}</span>'
+                if meta_parts
+                else ""
+            )
+            title = _esc(headline.title)
+            # rel="noopener" keeps the opened tab from reaching back into this
+            # page; noreferrer avoids leaking the local file path as a referrer.
+            body = (
+                f'<a href="{_esc(headline.url)}" target="_blank" '
+                f'rel="noopener noreferrer">{title}</a>'
+                if headline.url
+                else title
+            )
+            return f'<li class="{tone}">{body}{meta}</li>'
+
+        pos = "".join(_headline_item(h, "good") for h in detail.top_positive)
+        neg = "".join(_headline_item(h, "bad") for h in detail.top_negative)
+        headlines = (
+            '<h3>Headlines</h3>'
+            f'<ul class="headlines">{pos}{neg}</ul>'
+        )
 
     reasons = "".join(f"<li>{_esc(r)}</li>" for r in sentiment.reasons)
 
@@ -699,6 +727,15 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .bar.bad { fill: var(--bad); }
 .bar.warn { fill: #d09000; }
 footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 26px; }
+.brand { font-size: 10px; font-weight: 700; letter-spacing: 2.2px;
+  color: var(--muted); margin-bottom: 6px; }
+.brand-footer { margin-top: 10px; font-size: 11px; font-weight: 600;
+  letter-spacing: 1.6px; color: var(--muted); opacity: 0.85; }
+.headlines a { color: inherit; text-decoration: none;
+  border-bottom: 1px solid currentColor; }
+.headlines a:hover { opacity: 0.75; }
+.headline-meta { display: block; font-size: 11px; color: var(--muted);
+  letter-spacing: 0.2px; margin-top: 1px; }
 @media (max-width: 620px) { .swot { grid-template-columns: 1fr; } }
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .chart-block { min-width: 0; }
@@ -748,10 +785,11 @@ def render_report(report: ResearchReport, generated_at: str = "") -> str:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_esc(report.symbol)} research report</title>
+<title>{_esc(report.symbol)} research report &middot; Nikolay Gelshtein</title>
 <style>{_STYLE}</style></head>
 <body><div class="wrap">
 <header>
+  <div class="brand">NIKOLAY GELSHTEIN</div>
   <h1>{_esc(report.symbol)}</h1>
   {stamp}
 </header>
@@ -783,5 +821,6 @@ def render_report(report: ResearchReport, generated_at: str = "") -> str:
 <footer>
   Research output only &mdash; not financial advice, and no orders are placed.<br>
   Figures are point-in-time reads from public data sources and may be stale or wrong.
+  <div class="brand-footer">nova-research &middot; Nikolay Gelshtein</div>
 </footer>
 </div></body></html>"""

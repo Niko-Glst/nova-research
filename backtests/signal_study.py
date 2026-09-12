@@ -87,7 +87,7 @@ class SignalStudy:
     def summary(self) -> str:
         lines = [
             "=" * 68,
-            f"  SIGNAL STUDY -- {self.usable_count} symbols, "
+            f"  SIGNAL STUDY: {self.usable_count} symbols, "
             f"{self.return_window_days}-day return window",
             "=" * 68,
             "",

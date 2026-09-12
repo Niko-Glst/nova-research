@@ -160,7 +160,7 @@ def run_backtest(
     already lagged; leaving it on is what keeps the result honest.
     """
     if price_history is None or price_history.empty:
-        raise ValueError("price_history is empty -- nothing to backtest")
+        raise ValueError("price_history is empty, so there is nothing to backtest")
     if "Close" not in price_history.columns:
         raise ValueError("price_history must contain a 'Close' column")
 

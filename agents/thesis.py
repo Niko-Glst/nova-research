@@ -175,8 +175,8 @@ def _valuation_conditions(fundamental: FundamentalRead) -> list[Condition]:
                 Condition(
                     claim=f"Valuation stays reasonable against {peers.niche} peers",
                     current=(
-                        f"Forward P/E at {forward_pe_rel:.2f}x the peer median "
-                        f"-- at or below the group."
+                        f"Forward P/E at {forward_pe_rel:.2f}x the peer median, "
+                        f"at or below the group."
                     ),
                     met=True,
                     metric="forward_pe",
@@ -339,7 +339,7 @@ def _breaks_if(
         if volume.status == "spike":
             breaks.append(
                 f"The current {volume.ratio:.1f}x burst in coverage turns out to "
-                f"be bad news rather than good -- volume says how loudly, not how well."
+                f"be bad news rather than good, since volume says how loudly, not how well."
             )
 
     return breaks

@@ -192,8 +192,18 @@ class TestBuildNewsSignal:
             _item(0.3, "company files quarterly report"),
         ]
         signal = ns.build_news_signal(items, _score)
-        assert any("surges" in t for t in signal.top_positive)
-        assert any("plunge" in t for t in signal.top_negative)
+        assert any("surges" in h.title for h in signal.top_positive)
+        assert any("plunge" in h.title for h in signal.top_negative)
+
+    def test_headlines_keep_their_link_and_source(self):
+        """The report links each headline, so the URL has to survive scoring."""
+        items = [_item(0.1, "stock surges on record profit")]
+        signal = ns.build_news_signal(items, _score)
+        assert signal.top_positive
+        headline = signal.top_positive[0]
+        assert headline.url == "https://reuters.com/x"
+        assert headline.source == "reuters.com"
+        assert headline.age_days is not None
 
     def test_score_stays_within_bounds(self):
         items = [_item(0.0, "surge rally soar beat upgrade record") for _ in range(5)]

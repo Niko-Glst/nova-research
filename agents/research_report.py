@@ -367,10 +367,16 @@ def format_report(report: ResearchReport) -> str:
                 ]
             if detail.top_positive:
                 lines += ["", "    Most positive:"]
-                lines += [f"      + {title[:62]}" for title in detail.top_positive]
+                for headline in detail.top_positive:
+                    lines.append(f"      + {headline.title[:62]}")
+                    if headline.url:
+                        lines.append(f"        {headline.url}")
             if detail.top_negative:
                 lines += ["", "    Most negative:"]
-                lines += [f"      - {title[:62]}" for title in detail.top_negative]
+                for headline in detail.top_negative:
+                    lines.append(f"      - {headline.title[:62]}")
+                    if headline.url:
+                        lines.append(f"        {headline.url}")
 
         lines.append("")
         for reason in sentiment.reasons:
@@ -408,7 +414,8 @@ def format_report(report: ResearchReport) -> str:
 
     lines += [
         "=" * width,
-        "  Research output only -- not financial advice, no orders placed.",
+        "  Research output only: not financial advice, no orders placed.",
+        "  nova-research | Nikolay Gelshtein",
         "=" * width,
     ]
     return "\n".join(lines)
