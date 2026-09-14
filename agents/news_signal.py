@@ -154,9 +154,13 @@ def analyze_volume(
     # history, so if the oldest article is far newer than that, the response was
     # capped and the "missing" baseline is an artifact of the cap, not a
     # genuine absence of earlier coverage.
-    oldest_age = max(
-        (item.age_days for item in dated if item.age_days is not None), default=0.0
-    )
+    # Ages are computed against the `now` passed in, not against the wall clock.
+    # NewsItem.age_days reads datetime.now() directly, which would make this
+    # function's result depend on when it runs rather than on its arguments.
+    def _age(item) -> float:
+        return max(0.0, (now - item.published).total_seconds() / 86400.0)
+
+    oldest_age = max((_age(item) for item in dated), default=0.0)
 
     if dated:
         # The baseline needs *some* span beyond the recent window to be a

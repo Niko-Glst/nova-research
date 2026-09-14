@@ -69,7 +69,12 @@ rate_limits:
 peer_groups:
   consumer_electronics: [AAPL, SONY, HPQ, DELL, LOGI]
   software_infrastructure: [MSFT, ORCL, CRM, ADBE, NOW, VMW]
-  software_application: [CRM, NOW, INTU, ADSK, WDAY, TEAM]
+  # yfinance files Grindr and Duolingo under "Software - Application" alongside
+  # enterprise vendors like Salesforce and Workday, which are not comparable:
+  # a consumer subscription app and a B2B seat-licence business have different
+  # margins, churn and growth profiles entirely. This group is therefore the
+  # consumer set; enterprise names live under software_infrastructure.
+  software_application: [MTCH, BMBL, DUOL, PINS, SNAP, YELP]
   semiconductors: [NVDA, AMD, INTC, AVGO, QCOM, TXN, MU]
   internet_content_information: [GOOGL, META, NFLX, PINS, SNAP]
   internet_retail: [AMZN, BABA, EBAY, ETSY, CHWY]

@@ -162,25 +162,25 @@ class TestBuildNewsSignal:
             _item(0.1, "stock surges on upgrade after strong results"),
             _item(30, "stock plunges on fraud probe"),
         ]
-        signal = ns.build_news_signal(items, _score)
+        signal = ns.build_news_signal(items, _score, now=NOW)
         assert signal.score > 0
         # Without weighting the two would roughly cancel out.
         assert signal.score > signal.unweighted_score
 
     def test_unweighted_score_is_reported_for_comparison(self):
         items = [_item(0.1, "stock surges"), _item(30, "stock plunges")]
-        signal = ns.build_news_signal(items, _score)
+        signal = ns.build_news_signal(items, _score, now=NOW)
         assert signal.unweighted_score == pytest.approx(0.0, abs=0.1)
 
     def test_effective_sample_reflects_weighting(self):
         """Ten month-old articles are not ten articles' worth of evidence."""
         items = [_item(30) for _ in range(10)]
-        signal = ns.build_news_signal(items, _score)
+        signal = ns.build_news_signal(items, _score, now=NOW)
         assert signal.article_count == 10
         assert signal.effective_sample < 3
 
     def test_empty_input_is_handled(self):
-        signal = ns.build_news_signal([], _score)
+        signal = ns.build_news_signal([], _score, now=NOW)
         assert signal.score == 0.0
         assert signal.article_count == 0
         assert signal.volume.status == "unknown"
@@ -191,14 +191,14 @@ class TestBuildNewsSignal:
             _item(0.2, "shares plunge on fraud probe"),
             _item(0.3, "company files quarterly report"),
         ]
-        signal = ns.build_news_signal(items, _score)
+        signal = ns.build_news_signal(items, _score, now=NOW)
         assert any("surges" in h.title for h in signal.top_positive)
         assert any("plunge" in h.title for h in signal.top_negative)
 
     def test_headlines_keep_their_link_and_source(self):
         """The report links each headline, so the URL has to survive scoring."""
         items = [_item(0.1, "stock surges on record profit")]
-        signal = ns.build_news_signal(items, _score)
+        signal = ns.build_news_signal(items, _score, now=NOW)
         assert signal.top_positive
         headline = signal.top_positive[0]
         assert headline.url == "https://reuters.com/x"
@@ -207,14 +207,16 @@ class TestBuildNewsSignal:
 
     def test_score_stays_within_bounds(self):
         items = [_item(0.0, "surge rally soar beat upgrade record") for _ in range(5)]
-        assert -1.0 <= ns.build_news_signal(items, _score).score <= 1.0
+        assert -1.0 <= ns.build_news_signal(items, _score, now=NOW).score <= 1.0
 
     def test_volume_is_not_folded_into_sentiment(self):
         """A spike changes the volume read, never the direction of the score."""
         quiet = [_item(d, "stock surges") for d in (5, 8, 10, 14, 20, 25)]
         spike = [_item(d, "stock surges") for d in (0.1, 0.2, 0.3, 0.4, 10, 20)]
-        quiet_signal = ns.build_news_signal(quiet, _score)
-        spike_signal = ns.build_news_signal(spike, _score)
+        # `now` must be pinned: the items are dated relative to NOW, so letting
+        # this fall back to the wall clock makes the test fail as time passes.
+        quiet_signal = ns.build_news_signal(quiet, _score, now=NOW)
+        spike_signal = ns.build_news_signal(spike, _score, now=NOW)
         assert spike_signal.score > 0 and quiet_signal.score > 0
         assert spike_signal.volume.status != quiet_signal.volume.status
 
