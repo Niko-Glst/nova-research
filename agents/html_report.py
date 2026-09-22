@@ -19,7 +19,9 @@ from agents.charts import (
     PeerBar,
     equity_curve_chart,
     monte_carlo_histogram,
+    outcome_fan_chart,
     peer_metric_chart,
+    probability_ladder_chart,
 )
 from agents.research_report import ResearchReport
 
@@ -657,6 +659,97 @@ def _simulation_section(report: ResearchReport) -> str:
     </section>"""
 
 
+def _outcome_section(report: ResearchReport) -> str:
+    """Forward outcome probabilities, split by volatility regime.
+
+    This is the part of the report that answers "what could happen and how
+    likely is it", as distinct from the backtest's "would this rule have
+    worked". The two are kept visually separate for that reason.
+    """
+    outcomes = report.outcomes
+    if outcomes is None or not outcomes.regimes:
+        return ""
+
+    from backtests.outcome_distribution import (
+        DRAWDOWN_THRESHOLDS,
+        RETURN_THRESHOLDS,
+    )
+
+    names = [n for n in ("calm", "volatile", "all") if n in outcomes.regimes]
+    current = outcomes.current
+
+    headline = ""
+    if current is not None:
+        headline = (
+            '<div class="stats">'
+            f'<div class="stat"><span class="stat-label">Median outcome</span>'
+            f'<span class="stat-value">{current.median_return_pct:+.0f}%</span></div>'
+            f'<div class="stat"><span class="stat-label">P(any gain)</span>'
+            f'<span class="stat-value">'
+            f'{current.probability_of_return_above[0.0]:.0%}</span></div>'
+            f'<div class="stat"><span class="stat-label">P(down 20%+)</span>'
+            f'<span class="stat-value">'
+            f'{current.probability_of_drawdown_beyond[20.0]:.0%}</span></div>'
+            f'<div class="stat"><span class="stat-label">Worst-5% mean</span>'
+            f'<span class="stat-value">{current.expected_shortfall_pct:.0f}%</span></div>'
+            "</div>"
+        )
+
+    fan = outcome_fan_chart(
+        {n: outcomes.regimes[n].return_percentiles for n in names},
+        outcomes.horizon_days,
+    )
+
+    gains = probability_ladder_chart(
+        [t for t in RETURN_THRESHOLDS if t >= 0],
+        {
+            n: [
+                outcomes.regimes[n].probability_of_return_above[t]
+                for t in RETURN_THRESHOLDS
+                if t >= 0
+            ]
+            for n in names
+        },
+        "Probability the return exceeds",
+    )
+
+    drawdowns = probability_ladder_chart(
+        list(DRAWDOWN_THRESHOLDS),
+        {
+            n: [
+                outcomes.regimes[n].probability_of_drawdown_beyond[t]
+                for t in DRAWDOWN_THRESHOLDS
+            ]
+            for n in names
+        },
+        "Probability of a drawdown beyond",
+        positive_is_good=False,
+    )
+
+    caveats = "".join(f"<li>{_esc(c)}</li>" for c in outcomes.caveats)
+
+    return f"""
+    <section class="card">
+      <h2>Outcome probabilities
+        <span class="pill muted">{outcomes.horizon_days}-day horizon</span></h2>
+      <p class="muted-text">What this stock's own return history implies, split by
+         volatility regime. Currently in the <strong>{_esc(outcomes.current_regime)}</strong>
+         regime for this symbol: trailing volatility
+         {outcomes.current_volatility_pct:.0f}% against a
+         {outcomes.regime_threshold_pct:.0f}% split. Calm is relative &mdash; the
+         same number would be extreme for a utility.</p>
+      {headline}
+      <h3>Return range by regime</h3>
+      {fan}
+      <div class="chart-grid">
+        <div class="chart-block">{gains}</div>
+        <div class="chart-block">{drawdowns}</div>
+      </div>
+      <h3>What this does not tell you</h3>
+      <ul class="reasons">{caveats}</ul>
+    </section>"""
+
+
 _STYLE = """
 :root {
   --bg: #f6f7f9; --card: #ffffff; --ink: #1a1d21; --muted: #6b7280;
@@ -763,6 +856,17 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
 .curve-label.strategy { fill: #1f4fd8; }
 .curve-label.buyhold { fill: #6b7280; }
 @media (max-width: 620px) { .chart-grid { grid-template-columns: 1fr; } }
+.ladder-chart, .fan-chart { width: 100%; height: auto; margin: 6px 0; }
+.bar.calm { fill: #4a7fb5; }
+.bar.volatile { fill: #c26b4a; }
+.bar.blend { fill: #8a8f98; }
+.band { opacity: 0.35; }
+.band.inner { opacity: 0.75; }
+.band.calm { fill: #4a7fb5; }
+.band.volatile { fill: #c26b4a; }
+.band.blend { fill: #8a8f98; }
+.median-mark { stroke: var(--ink); stroke-width: 1.8; }
+.axis-label.bold { font-weight: 700; fill: var(--ink); }
 """
 
 
@@ -811,6 +915,7 @@ def render_report(report: ResearchReport, generated_at: str = "") -> str:
 {_swot_section(report)}
 {_peer_section(report)}
 {_eps_peer_section(report)}
+{_outcome_section(report)}
 {_simulation_section(report)}
 {_fundamentals_section(report)}
 {_technical_section(report)}

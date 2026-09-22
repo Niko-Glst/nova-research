@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from agents import fa_analyst, insider_analyst, sentiment_analyst, strategy_agent
 from agents import swot as swot_module
 from agents import ta_analyst, thesis as thesis_module
-from backtests import backtest_engine, monte_carlo
+from backtests import backtest_engine, monte_carlo, outcome_distribution
 
 # How much each leg counts toward the combined score.
 WEIGHTS = {
@@ -73,6 +73,7 @@ class ResearchReport:
     # from repr: this is thousands of floats.
     simulated_returns: object = field(default=None, repr=False)
     buy_hold_equity: object = field(default=None, repr=False)
+    outcomes: outcome_distribution.OutcomeDistribution | None = None
 
 
 def _stance_value(stance: str | None) -> float | None:
@@ -132,6 +133,7 @@ def analyze(
     simulation = None
     simulated = None
     buy_hold = None
+    outcomes = None
     if run_simulation:
         try:
             history = ta_analyst.fetch_price_history(symbol, period=backtest_period)
@@ -145,6 +147,13 @@ def analyze(
             equity = backtest_result.equity_curve.to_numpy()
             closes = history["Close"].astype(float).to_numpy()
             buy_hold = closes / closes[0]
+
+            try:
+                outcomes = outcome_distribution.build_distribution(
+                    symbol, history, num_simulations=5000, seed=42
+                )
+            except Exception as exc:
+                errors["outcomes"] = f"{type(exc).__name__}: {exc}"
 
             strategy_returns = _np.diff(equity) / equity[:-1]
             if strategy_returns.size > 2 and strategy_returns.std() > 0:
@@ -221,6 +230,7 @@ def analyze(
         monte_carlo=simulation,
         simulated_returns=simulated,
         buy_hold_equity=buy_hold,
+        outcomes=outcomes,
     )
 
 

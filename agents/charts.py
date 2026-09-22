@@ -307,3 +307,165 @@ def equity_curve_chart(
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+# --------------------------------------------------------------------------
+# Outcome probabilities
+# --------------------------------------------------------------------------
+
+
+def probability_ladder_chart(
+    thresholds: list[float],
+    by_regime: dict[str, list[float]],
+    title: str,
+    positive_is_good: bool = True,
+) -> str:
+    """Grouped bars: one row per threshold, one bar per regime.
+
+    Reading a probability table means holding three numbers in mind at once;
+    the same values as side-by-side bars make the gap between calm and volatile
+    immediately visible, which is the whole reason for splitting them.
+    """
+    if not thresholds or not by_regime:
+        return ""
+
+    regimes = list(by_regime)
+    row_height = 15 * len(regimes) + 12
+    label_width = 74
+    chart_width = 330
+    height = len(thresholds) * row_height + 42
+    width = label_width + chart_width + 52
+
+    tones = {"calm": "calm", "volatile": "volatile", "all": "blend"}
+
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" class="ladder-chart" role="img" '
+        f'aria-label="{_esc(title)} by volatility regime">',
+        f'<text x="{label_width}" y="11" class="chart-title">{_esc(title)}</text>',
+    ]
+
+    # Legend.
+    legend_x = label_width + 120
+    for index, regime in enumerate(regimes):
+        x = legend_x + index * 74
+        parts.append(
+            f'<rect x="{x}" y="4" width="8" height="8" '
+            f'class="bar {tones.get(regime, "blend")}" rx="1"/>'
+        )
+        parts.append(
+            f'<text x="{x + 11}" y="11" class="axis-label">{_esc(regime)}</text>'
+        )
+
+    for row, threshold in enumerate(thresholds):
+        group_y = 22 + row * row_height
+        sign = "+" if positive_is_good and threshold >= 0 else ""
+        parts.append(
+            f'<text x="{label_width - 8}" y="{group_y + row_height / 2 - 2}" '
+            f'class="bar-label" text-anchor="end">{sign}{threshold:.0f}%</text>'
+        )
+
+        for index, regime in enumerate(regimes):
+            probability = by_regime[regime][row]
+            bar_y = group_y + index * 15
+            bar_width = max(probability * chart_width, 1.0)
+            parts.append(
+                f'<rect x="{label_width}" y="{bar_y}" width="{bar_width:.1f}" '
+                f'height="12" class="bar {tones.get(regime, "blend")}" rx="1"/>'
+            )
+            parts.append(
+                f'<text x="{label_width + bar_width + 5:.1f}" y="{bar_y + 10}" '
+                f'class="bar-value">{probability:.0%}</text>'
+            )
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def outcome_fan_chart(
+    percentiles_by_regime: dict[str, dict[int, float]],
+    horizon_days: int,
+) -> str:
+    """Percentile ranges as horizontal bands, one row per regime.
+
+    Each band runs p5 to p95 with the inner p25-p75 shaded darker and the
+    median marked. Stacking the regimes vertically on a shared axis is what
+    makes the difference between them legible at a glance.
+    """
+    if not percentiles_by_regime:
+        return ""
+
+    regimes = list(percentiles_by_regime)
+    row_height = 46
+    label_width = 66
+    chart_width = 420
+    height = len(regimes) * row_height + 50
+    width = label_width + chart_width + 24
+
+    every = [v for p in percentiles_by_regime.values() for v in p.values()]
+    low, high = min(every), max(every)
+    low = min(low, 0.0)
+    span = (high - low) or 1.0
+    pad = span * 0.05
+    low, high = low - pad, high + pad
+    span = high - low
+
+    def x_for(value: float) -> float:
+        return label_width + (value - low) / span * chart_width
+
+    zero_x = x_for(0.0)
+    tones = {"calm": "calm", "volatile": "volatile", "all": "blend"}
+
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" class="fan-chart" role="img" '
+        f'aria-label="Return percentile ranges over {horizon_days} days by regime">',
+        f'<line x1="{zero_x:.1f}" y1="16" x2="{zero_x:.1f}" y2="{height - 26}" '
+        f'class="axis"/>',
+        f'<text x="{zero_x:.1f}" y="12" class="axis-label" text-anchor="middle">'
+        f'break-even</text>',
+    ]
+
+    for index, regime in enumerate(regimes):
+        p = percentiles_by_regime[regime]
+        y = 22 + index * row_height
+        tone = tones.get(regime, "blend")
+
+        outer_x, outer_w = x_for(p[5]), x_for(p[95]) - x_for(p[5])
+        inner_x, inner_w = x_for(p[25]), x_for(p[75]) - x_for(p[25])
+        median_x = x_for(p[50])
+
+        parts.append(
+            f'<text x="{label_width - 8}" y="{y + 18}" class="bar-label" '
+            f'text-anchor="end">{_esc(regime)}</text>'
+        )
+        parts.append(
+            f'<rect x="{outer_x:.1f}" y="{y + 4}" width="{max(outer_w, 1):.1f}" '
+            f'height="22" class="band outer {tone}" rx="3"/>'
+        )
+        parts.append(
+            f'<rect x="{inner_x:.1f}" y="{y + 4}" width="{max(inner_w, 1):.1f}" '
+            f'height="22" class="band inner {tone}" rx="2"/>'
+        )
+        parts.append(
+            f'<line x1="{median_x:.1f}" y1="{y + 1}" x2="{median_x:.1f}" '
+            f'y2="{y + 29}" class="median-mark"/>'
+        )
+        parts.append(
+            f'<text x="{outer_x:.1f}" y="{y + 38}" class="axis-label">'
+            f'{p[5]:+.0f}%</text>'
+        )
+        parts.append(
+            f'<text x="{median_x:.1f}" y="{y + 38}" class="axis-label bold" '
+            f'text-anchor="middle">{p[50]:+.0f}%</text>'
+        )
+        parts.append(
+            f'<text x="{outer_x + outer_w:.1f}" y="{y + 38}" class="axis-label" '
+            f'text-anchor="end">{p[95]:+.0f}%</text>'
+        )
+
+    parts.append(
+        f'<text x="{label_width + chart_width / 2}" y="{height - 6}" '
+        f'class="axis-label" text-anchor="middle">'
+        f'p5 to p95 range over {horizon_days} days, median marked</text>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
