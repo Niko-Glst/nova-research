@@ -414,7 +414,7 @@ def _write_report_file(report: research_report.ResearchReport) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Serve the research tool on localhost.",
-        epilog="Research output only -- not financial advice.",
+        epilog="Research output only, not financial advice.",
     )
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument(

@@ -59,6 +59,50 @@ _SIGNAL_TONE = {
 }
 
 
+# Terms a reader may not know, linked to a definition on first use in a
+# section. Kept to genuine jargon: linking "revenue" would be noise, while
+# "Sortino ratio" and "expected shortfall" are worth one click.
+_GLOSSARY = {
+    "Sharpe": "https://www.investopedia.com/terms/s/sharperatio.asp",
+    "Sortino": "https://www.investopedia.com/terms/s/sortinoratio.asp",
+    "max drawdown": "https://www.investopedia.com/terms/m/maximum-drawdown-mdd.asp",
+    "drawdown": "https://www.investopedia.com/terms/d/drawdown.asp",
+    "Monte Carlo": "https://www.investopedia.com/terms/m/montecarlosimulation.asp",
+    "block bootstrap": "https://www.investopedia.com/terms/b/bootstrapping.asp",
+    "expected shortfall": "https://www.investopedia.com/terms/c/conditional_value_at_risk.asp",
+    "CVaR": "https://www.investopedia.com/terms/c/conditional_value_at_risk.asp",
+    "percentile": "https://www.investopedia.com/terms/p/percentile.asp",
+    "realised volatility": "https://www.investopedia.com/terms/v/volatility.asp",
+    "volatility": "https://www.investopedia.com/terms/v/volatility.asp",
+    "buy-and-hold": "https://www.investopedia.com/terms/b/buyandhold.asp",
+    "basis point": "https://www.investopedia.com/terms/b/basispoint.asp",
+    "forward P/E": "https://www.investopedia.com/terms/f/forwardpe.asp",
+    "P/E": "https://www.investopedia.com/terms/p/price-earningsratio.asp",
+    "PEG ratio": "https://www.investopedia.com/terms/p/pegratio.asp",
+    "EPS": "https://www.investopedia.com/terms/e/eps.asp",
+    "free cash flow": "https://www.investopedia.com/terms/f/freecashflow.asp",
+    "return on equity": "https://www.investopedia.com/terms/r/returnonequity.asp",
+    "Form 4": "https://www.investopedia.com/terms/f/form4.asp",
+    "10b5-1": "https://www.investopedia.com/terms/r/rule-10b5-1.asp",
+    "Donchian": "https://www.investopedia.com/terms/d/donchianchannels.asp",
+    "RSI": "https://www.investopedia.com/terms/r/rsi.asp",
+    "MACD": "https://www.investopedia.com/terms/m/macd.asp",
+    "moving average": "https://www.investopedia.com/terms/m/movingaverage.asp",
+}
+
+
+def _term(name: str, label: str | None = None) -> str:
+    """Render a jargon term as a link to its definition."""
+    url = _GLOSSARY.get(name)
+    shown = _esc(label or name)
+    if url is None:
+        return shown
+    return (
+        f'<a class="term" href="{url}" target="_blank" rel="noopener noreferrer">'
+        f"{shown}</a>"
+    )
+
+
 @dataclass(frozen=True)
 class _Bar:
     label: str
@@ -265,8 +309,8 @@ def _swot_section(report: ResearchReport) -> str:
     return f"""
     <section class="card">
       <h2>SWOT</h2>
-      <p class="muted-text">Derived from the measured figures; each line names the
-         number behind it.</p>
+      <p class="muted-text">Each entry is generated from a threshold on a
+         measured figure and states that figure.</p>
       <div class="swot">
         {quadrant("Strengths", swot.strengths, "good")}
         {quadrant("Weaknesses", swot.weaknesses, "bad")}
@@ -308,10 +352,11 @@ def _peer_section(report: ResearchReport) -> str:
     return f"""
     <section class="card">
       <h2>Peer comparison &mdash; {_esc(peers.niche)}</h2>
-      <p class="muted-text">Compared against {len(peers.peers_used)} {scope} peers:
-         {_esc(", ".join(peers.peers_used))}. Bars show each metric relative to the
-         peer median; green is the favourable side, which differs per metric
-         (cheap is good for a multiple, high is good for a margin).</p>
+      <p class="muted-text">{len(peers.peers_used)} {scope} peers:
+         {_esc(", ".join(peers.peers_used))}. Each bar is this company's value
+         divided by the peer median. Green marks the favourable direction, which
+         inverts by metric type: lower is favourable for a valuation multiple,
+         higher for a margin. Negative multiples are excluded from both sides.</p>
       {fallback_note}
       {_peer_chart_svg(bars)}
       <table>
@@ -558,9 +603,8 @@ def _eps_peer_section(report: ResearchReport) -> str:
     return f"""
     <section class="card">
       <h2>Peer detail &mdash; {_esc(peers.niche)}</h2>
-      <p class="muted-text">Each peer individually, with {_esc(report.symbol)}
-         highlighted. A median hides whether the group is a tight cluster or an
-         average of extremes; these bars show which.</p>
+      <p class="muted-text">Per-peer values with {_esc(report.symbol)}
+         highlighted. Shows the dispersion behind the median.</p>
       <div class="chart-grid">{"".join(charts)}</div>
     </section>"""
 
@@ -608,16 +652,16 @@ def _simulation_section(report: ResearchReport) -> str:
             where = simulation.observed_percentile
             if where > 90:
                 judgement = (
-                    "in the top decile of its own resampling, so treat the "
-                    "backtest as a favourable draw rather than an expectation"
+                    "top decile of the resampled distribution; the realised "
+                    "path was a favourable draw, not an expected value"
                 )
             elif where < 10:
-                judgement = "in the bottom decile: the realised path was a poor draw"
+                judgement = "bottom decile of the resampled distribution"
             else:
-                judgement = "near the middle: the realised path was typical"
+                judgement = "near the median of the resampled distribution"
             percentile_note = (
                 '<p class="muted-text">The realised backtest sits at percentile '
-                f"<strong>{where:.0f}</strong> of this distribution &mdash; {judgement}.</p>"
+                f"<strong>{where:.0f}</strong>: {judgement}.</p>"
             )
 
         mc_stats = "".join(
@@ -641,9 +685,11 @@ def _simulation_section(report: ResearchReport) -> str:
 
         mc_block = f"""
         <h3>Monte Carlo &mdash; {simulation.num_simulations:,} resampled paths</h3>
-        <p class="muted-text">The backtest gives one path: the one that happened.
-           Resampling its returns shows the distribution it could plausibly have
-           produced over a {simulation.horizon_days}-day horizon.</p>
+        <p class="muted-text">{_term("Monte Carlo")} resampling of the
+           strategy's realised daily returns via
+           {_term("block bootstrap")}, which preserves volatility clustering.
+           {simulation.num_simulations:,} paths over
+           {simulation.horizon_days} trading days.</p>
         <div class="stats">{mc_stats}</div>
         {histogram}
         {percentile_note}"""
@@ -651,8 +697,10 @@ def _simulation_section(report: ResearchReport) -> str:
     return f"""
     <section class="card">
       <h2>Backtest <span class="pill {verdict_tone}">{verdict_text}</span></h2>
-      <p class="muted-text">50/200-day crossover, 10bps per side, signals shifted
-         one bar so they are traded after they are observed. Simulation only.</p>
+      <p class="muted-text">50/200-day {_term("moving average", "moving-average")}
+         crossover. Costs: 10 {_term("basis point", "basis points")} per side.
+         Signals are lagged one bar, so each is traded on the open after the close
+         that produced it. Long-only, single position, no leverage.</p>
       <div class="stats">{stats}</div>
       {equity_block}
       {mc_block}
@@ -710,7 +758,7 @@ def _outcome_section(report: ResearchReport) -> str:
             ]
             for n in names
         },
-        "Probability the return exceeds",
+        "P(return exceeds threshold)",
     )
 
     drawdowns = probability_ladder_chart(
@@ -722,7 +770,7 @@ def _outcome_section(report: ResearchReport) -> str:
             ]
             for n in names
         },
-        "Probability of a drawdown beyond",
+        "P(peak-to-trough decline exceeds)",
         positive_is_good=False,
     )
 
@@ -732,20 +780,22 @@ def _outcome_section(report: ResearchReport) -> str:
     <section class="card">
       <h2>Outcome probabilities
         <span class="pill muted">{outcomes.horizon_days}-day horizon</span></h2>
-      <p class="muted-text">What this stock's own return history implies, split by
-         volatility regime. Currently in the <strong>{_esc(outcomes.current_regime)}</strong>
-         regime for this symbol: trailing volatility
-         {outcomes.current_volatility_pct:.0f}% against a
-         {outcomes.regime_threshold_pct:.0f}% split. Calm is relative &mdash; the
-         same number would be extreme for a utility.</p>
+      <p class="muted-text">{_term("block bootstrap")} of this stock's own
+         daily returns, partitioned by trailing 21-day
+         {_term("realised volatility")} at the 67th
+         {_term("percentile")}. Current state:
+         <strong>{_esc(outcomes.current_regime)}</strong> at
+         {outcomes.current_volatility_pct:.0f}% annualised against a
+         {outcomes.regime_threshold_pct:.0f}% split. The threshold is
+         symbol-specific, so the labels are not comparable across tickers.</p>
       {headline}
-      <h3>Return range by regime</h3>
+      <h3>Return distribution</h3>
       {fan}
       <div class="chart-grid">
         <div class="chart-block">{gains}</div>
         <div class="chart-block">{drawdowns}</div>
       </div>
-      <h3>What this does not tell you</h3>
+      <h3>Model limitations</h3>
       <ul class="reasons">{caveats}</ul>
     </section>"""
 
@@ -856,7 +906,14 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
 .curve-label.strategy { fill: #1f4fd8; }
 .curve-label.buyhold { fill: #6b7280; }
 @media (max-width: 620px) { .chart-grid { grid-template-columns: 1fr; } }
-.ladder-chart, .fan-chart { width: 100%; height: auto; margin: 6px 0; }
+.ladder-chart, .fan-chart { width: 100%; height: auto; margin: 10px 0 4px; }
+.gridline { stroke: var(--line); stroke-width: 1; }
+.zero-line { stroke: #9aa0a6; stroke-width: 1; stroke-dasharray: 2 2; }
+.row-label { font-size: 11px; font-weight: 600; fill: var(--ink); }
+.bar-inline { font-size: 10px; font-weight: 600; fill: #fff; }
+a.term { color: inherit; text-decoration: none;
+  border-bottom: 1px dotted var(--muted); }
+a.term:hover { border-bottom-style: solid; }
 .bar.calm { fill: #4a7fb5; }
 .bar.volatile { fill: #c26b4a; }
 .bar.blend { fill: #8a8f98; }
@@ -924,8 +981,8 @@ def render_report(report: ResearchReport, generated_at: str = "") -> str:
 {errors_block}
 
 <footer>
-  Research output only &mdash; not financial advice, and no orders are placed.<br>
-  Figures are point-in-time reads from public data sources and may be stale or wrong.
+  Research output. Not investment advice. No orders are placed.<br>
+  Figures are point-in-time reads from public data sources and may be stale or incorrect.
   <div class="brand-footer">nova-research &middot; Nikolay Gelshtein</div>
 </footer>
 </div></body></html>"""

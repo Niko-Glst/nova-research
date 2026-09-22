@@ -232,7 +232,9 @@ class TestHtmlRendering:
         )
         assert "<!doctype html>" in html.lower()
         assert "TEST" in html
-        assert "not financial advice" in html
+        # The disclaimer must be present; its exact wording may change.
+        assert "not investment advice" in html.lower()
+        assert "no orders are placed" in html.lower()
 
     def test_symbol_is_escaped(self):
         """Report content must not be able to inject markup."""

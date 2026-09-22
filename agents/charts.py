@@ -320,62 +320,98 @@ def probability_ladder_chart(
     title: str,
     positive_is_good: bool = True,
 ) -> str:
-    """Grouped bars: one row per threshold, one bar per regime.
+    """Grouped horizontal bars: one threshold per row, one bar per regime.
 
-    Reading a probability table means holding three numbers in mind at once;
-    the same values as side-by-side bars make the gap between calm and volatile
-    immediately visible, which is the whole reason for splitting them.
+    Bars are drawn on a fixed 0-100% scale so rows are comparable across the
+    two ladders. Values are printed inside the bar when it is wide enough to
+    hold the text and outside otherwise, which is what keeps labels off each
+    other at small probabilities.
     """
     if not thresholds or not by_regime:
         return ""
 
     regimes = list(by_regime)
-    row_height = 15 * len(regimes) + 12
-    label_width = 74
-    chart_width = 330
-    height = len(thresholds) * row_height + 42
-    width = label_width + chart_width + 52
+    bar_height = 13
+    bar_gap = 2
+    group_gap = 12
+    group_height = len(regimes) * (bar_height + bar_gap) + group_gap
+
+    label_width = 58
+    chart_width = 300
+    right_gutter = 44
+    header = 34
+    footer = 22
+
+    height = len(thresholds) * group_height + header + footer
+    width = label_width + chart_width + right_gutter
 
     tones = {"calm": "calm", "volatile": "volatile", "all": "blend"}
 
     parts = [
         f'<svg viewBox="0 0 {width} {height}" class="ladder-chart" role="img" '
         f'aria-label="{_esc(title)} by volatility regime">',
-        f'<text x="{label_width}" y="11" class="chart-title">{_esc(title)}</text>',
+        f'<text x="0" y="11" class="chart-title">{_esc(title)}</text>',
     ]
 
-    # Legend.
-    legend_x = label_width + 120
-    for index, regime in enumerate(regimes):
-        x = legend_x + index * 74
+    # Legend, right-aligned on the title row.
+    legend_x = width
+    for regime in reversed(regimes):
+        legend_x -= 58
         parts.append(
-            f'<rect x="{x}" y="4" width="8" height="8" '
+            f'<rect x="{legend_x}" y="3" width="8" height="8" '
             f'class="bar {tones.get(regime, "blend")}" rx="1"/>'
         )
         parts.append(
-            f'<text x="{x + 11}" y="11" class="axis-label">{_esc(regime)}</text>'
+            f'<text x="{legend_x + 11}" y="11" class="axis-label">{_esc(regime)}</text>'
+        )
+
+    # Gridlines at 0, 25, 50, 75, 100%.
+    for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
+        x = label_width + fraction * chart_width
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{header - 8}" x2="{x:.1f}" '
+            f'y2="{height - footer + 2}" class="gridline"/>'
+        )
+        parts.append(
+            f'<text x="{x:.1f}" y="{height - footer + 15}" class="axis-label" '
+            f'text-anchor="middle">{fraction * 100:.0f}%</text>'
         )
 
     for row, threshold in enumerate(thresholds):
-        group_y = 22 + row * row_height
-        sign = "+" if positive_is_good and threshold >= 0 else ""
+        group_y = header + row * group_height
+        sign = "+" if positive_is_good and threshold >= 0 else "\u2212"
+        label = f"{sign}{abs(threshold):.0f}%"
+        centre = group_y + (len(regimes) * (bar_height + bar_gap)) / 2
+
         parts.append(
-            f'<text x="{label_width - 8}" y="{group_y + row_height / 2 - 2}" '
-            f'class="bar-label" text-anchor="end">{sign}{threshold:.0f}%</text>'
+            f'<text x="{label_width - 10}" y="{centre + 3:.1f}" '
+            f'class="row-label" text-anchor="end">{label}</text>'
         )
 
         for index, regime in enumerate(regimes):
             probability = by_regime[regime][row]
-            bar_y = group_y + index * 15
-            bar_width = max(probability * chart_width, 1.0)
+            bar_y = group_y + index * (bar_height + bar_gap)
+            bar_width = probability * chart_width
+            tone = tones.get(regime, "blend")
+
             parts.append(
-                f'<rect x="{label_width}" y="{bar_y}" width="{bar_width:.1f}" '
-                f'height="12" class="bar {tones.get(regime, "blend")}" rx="1"/>'
+                f'<rect x="{label_width}" y="{bar_y}" '
+                f'width="{max(bar_width, 0.8):.1f}" height="{bar_height}" '
+                f'class="bar {tone}" rx="1"/>'
             )
-            parts.append(
-                f'<text x="{label_width + bar_width + 5:.1f}" y="{bar_y + 10}" '
-                f'class="bar-value">{probability:.0%}</text>'
-            )
+            # Inside the bar when there is room; outside when there is not.
+            if bar_width >= 34:
+                parts.append(
+                    f'<text x="{label_width + bar_width - 5:.1f}" '
+                    f'y="{bar_y + bar_height - 3}" class="bar-inline" '
+                    f'text-anchor="end">{probability:.0%}</text>'
+                )
+            else:
+                parts.append(
+                    f'<text x="{label_width + bar_width + 5:.1f}" '
+                    f'y="{bar_y + bar_height - 3}" class="bar-value">'
+                    f'{probability:.0%}</text>'
+                )
 
     parts.append("</svg>")
     return "".join(parts)
@@ -387,25 +423,28 @@ def outcome_fan_chart(
 ) -> str:
     """Percentile ranges as horizontal bands, one row per regime.
 
-    Each band runs p5 to p95 with the inner p25-p75 shaded darker and the
-    median marked. Stacking the regimes vertically on a shared axis is what
-    makes the difference between them legible at a glance.
+    Each band spans p5 to p95, with p25-p75 shaded darker and the median
+    marked. Endpoint values sit on the axis row beneath all bands rather than
+    under each one, which is what previously caused rows to collide.
     """
     if not percentiles_by_regime:
         return ""
 
     regimes = list(percentiles_by_regime)
-    row_height = 46
-    label_width = 66
-    chart_width = 420
-    height = len(regimes) * row_height + 50
-    width = label_width + chart_width + 24
+    band_height = 20
+    row_height = 30
+    label_width = 62
+    chart_width = 430
+    header = 26
+    axis_height = 46
+
+    height = len(regimes) * row_height + header + axis_height
+    width = label_width + chart_width + 30
 
     every = [v for p in percentiles_by_regime.values() for v in p.values()]
     low, high = min(every), max(every)
     low = min(low, 0.0)
-    span = (high - low) or 1.0
-    pad = span * 0.05
+    pad = ((high - low) or 1.0) * 0.08
     low, high = low - pad, high + pad
     span = high - low
 
@@ -418,15 +457,22 @@ def outcome_fan_chart(
     parts = [
         f'<svg viewBox="0 0 {width} {height}" class="fan-chart" role="img" '
         f'aria-label="Return percentile ranges over {horizon_days} days by regime">',
-        f'<line x1="{zero_x:.1f}" y1="16" x2="{zero_x:.1f}" y2="{height - 26}" '
-        f'class="axis"/>',
-        f'<text x="{zero_x:.1f}" y="12" class="axis-label" text-anchor="middle">'
-        f'break-even</text>',
     ]
+
+    # Zero reference line spanning the plot area.
+    plot_bottom = header + len(regimes) * row_height
+    parts.append(
+        f'<line x1="{zero_x:.1f}" y1="{header - 8}" x2="{zero_x:.1f}" '
+        f'y2="{plot_bottom + 4}" class="zero-line"/>'
+    )
+    parts.append(
+        f'<text x="{zero_x:.1f}" y="{header - 12}" class="axis-label" '
+        f'text-anchor="middle">0%</text>'
+    )
 
     for index, regime in enumerate(regimes):
         p = percentiles_by_regime[regime]
-        y = 22 + index * row_height
+        y = header + index * row_height
         tone = tones.get(regime, "blend")
 
         outer_x, outer_w = x_for(p[5]), x_for(p[95]) - x_for(p[5])
@@ -434,38 +480,49 @@ def outcome_fan_chart(
         median_x = x_for(p[50])
 
         parts.append(
-            f'<text x="{label_width - 8}" y="{y + 18}" class="bar-label" '
-            f'text-anchor="end">{_esc(regime)}</text>'
+            f'<text x="{label_width - 10}" y="{y + band_height - 6}" '
+            f'class="row-label" text-anchor="end">{_esc(regime)}</text>'
         )
         parts.append(
-            f'<rect x="{outer_x:.1f}" y="{y + 4}" width="{max(outer_w, 1):.1f}" '
-            f'height="22" class="band outer {tone}" rx="3"/>'
+            f'<rect x="{outer_x:.1f}" y="{y}" width="{max(outer_w, 1):.1f}" '
+            f'height="{band_height}" class="band outer {tone}" rx="2"/>'
         )
         parts.append(
-            f'<rect x="{inner_x:.1f}" y="{y + 4}" width="{max(inner_w, 1):.1f}" '
-            f'height="22" class="band inner {tone}" rx="2"/>'
+            f'<rect x="{inner_x:.1f}" y="{y}" width="{max(inner_w, 1):.1f}" '
+            f'height="{band_height}" class="band inner {tone}" rx="2"/>'
         )
         parts.append(
-            f'<line x1="{median_x:.1f}" y1="{y + 1}" x2="{median_x:.1f}" '
-            f'y2="{y + 29}" class="median-mark"/>'
+            f'<line x1="{median_x:.1f}" y1="{y - 2}" x2="{median_x:.1f}" '
+            f'y2="{y + band_height + 2}" class="median-mark"/>'
         )
+        # Median value to the right of the band, clear of every other label.
         parts.append(
-            f'<text x="{outer_x:.1f}" y="{y + 38}" class="axis-label">'
-            f'{p[5]:+.0f}%</text>'
-        )
-        parts.append(
-            f'<text x="{median_x:.1f}" y="{y + 38}" class="axis-label bold" '
-            f'text-anchor="middle">{p[50]:+.0f}%</text>'
-        )
-        parts.append(
-            f'<text x="{outer_x + outer_w:.1f}" y="{y + 38}" class="axis-label" '
-            f'text-anchor="end">{p[95]:+.0f}%</text>'
+            f'<text x="{label_width + chart_width + 6}" '
+            f'y="{y + band_height - 6}" class="bar-value">{p[50]:+.0f}%</text>'
         )
 
+    # One axis for all bands: ticks at the extremes and the midpoint.
+    axis_y = plot_bottom + 10
     parts.append(
-        f'<text x="{label_width + chart_width / 2}" y="{height - 6}" '
-        f'class="axis-label" text-anchor="middle">'
-        f'p5 to p95 range over {horizon_days} days, median marked</text>'
+        f'<line x1="{label_width}" y1="{axis_y}" '
+        f'x2="{label_width + chart_width}" y2="{axis_y}" class="axis"/>'
     )
+    for value in (low + pad, (low + high) / 2, high - pad):
+        x = x_for(value)
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{axis_y}" x2="{x:.1f}" '
+            f'y2="{axis_y + 4}" class="axis"/>'
+        )
+        parts.append(
+            f'<text x="{x:.1f}" y="{axis_y + 15}" class="axis-label" '
+            f'text-anchor="middle">{value:+.0f}%</text>'
+        )
+    parts.append(
+        f'<text x="{label_width + chart_width / 2}" y="{axis_y + 27}" '
+        f'class="axis-label" text-anchor="middle">'
+        f'{horizon_days}-day return. Band: p5 to p95. Shaded: p25 to p75. '
+        f'Line: median.</text>'
+    )
+
     parts.append("</svg>")
     return "".join(parts)
