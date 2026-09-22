@@ -21,6 +21,7 @@ This produces a research verdict, not advice, and places no orders.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from agents import fa_analyst, insider_analyst, sentiment_analyst, strategy_agent
@@ -92,41 +93,71 @@ def analyze(
     run_simulation: bool = False,
     backtest_period: str = "5y",
     num_simulations: int = 2000,
+    on_progress: Callable[[str, str], None] | None = None,
 ) -> ResearchReport:
     """Run every analyst for a symbol and combine their verdicts.
 
     A failing analyst is recorded in `errors` and excluded from the score; one
     broken data source should not cost you the other three reads.
+
+    `on_progress(stage, message)` is called as each stage starts and finishes,
+    so a caller with a user waiting can show what is happening. A full run takes
+    one to three minutes, almost all of it rate-limit sleeping, and silence for
+    that long reads as a hang.
     """
     symbol = symbol.strip().upper()
     if not symbol:
         raise ValueError("symbol must be a non-empty string")
 
+    def report_progress(stage: str, message: str) -> None:
+        if on_progress is not None:
+            # A failing progress callback must never take down the analysis.
+            try:
+                on_progress(stage, message)
+            except Exception:
+                pass
+
     errors: dict[str, str] = {}
 
     technical: ta_analyst.TechnicalRead | None = None
+    report_progress("technical", "Fetching price history and computing indicators")
     try:
         technical = ta_analyst.analyze(symbol, period=period)
+        report_progress("technical", f"Technical read: {technical.signal}")
     except Exception as exc:
         errors["technical"] = f"{type(exc).__name__}: {exc}"
+        report_progress("technical", "Technical analysis unavailable")
 
     fundamental: fa_analyst.FundamentalRead | None = None
+    report_progress(
+        "fundamental",
+        "Fetching fundamentals"
+        + (" and comparing against niche peers" if include_peers else ""),
+    )
     try:
         fundamental = fa_analyst.analyze(symbol, include_peers=include_peers)
+        report_progress("fundamental", f"Fundamental read: {fundamental.signal}")
     except Exception as exc:
         errors["fundamental"] = f"{type(exc).__name__}: {exc}"
+        report_progress("fundamental", "Fundamental analysis unavailable")
 
     sentiment: sentiment_analyst.SentimentRead | None = None
+    report_progress("sentiment", "Reading news and Reddit sentiment")
     try:
         sentiment = sentiment_analyst.analyze(symbol, strict_allowlist=strict_allowlist)
+        report_progress("sentiment", f"Sentiment read: {sentiment.signal}")
     except Exception as exc:
         errors["sentiment"] = f"{type(exc).__name__}: {exc}"
+        report_progress("sentiment", "Sentiment unavailable")
 
     insider: insider_analyst.InsiderRead | None = None
+    report_progress("insider", "Classifying Form 4 insider filings")
     try:
         insider = insider_analyst.analyze(symbol, lookback_days=insider_lookback_days)
+        report_progress("insider", f"Insider read: {insider.signal}")
     except Exception as exc:
         errors["insider"] = f"{type(exc).__name__}: {exc}"
+        report_progress("insider", "Insider data unavailable")
 
     # --- Backtest and simulation (opt-in: it refetches a longer history) ---
     backtest_result = None
@@ -135,6 +166,7 @@ def analyze(
     buy_hold = None
     outcomes = None
     if run_simulation:
+        report_progress("simulation", "Running backtest and outcome simulation")
         try:
             history = ta_analyst.fetch_price_history(symbol, period=backtest_period)
             signals = strategy_agent.moving_average_crossover(history, symbol=symbol)
@@ -168,8 +200,10 @@ def analyze(
                     strategy_returns, num_simulations, 252, seed=42
                 )
                 simulated = (_np.cumprod(1.0 + paths, axis=1)[:, -1] - 1.0) * 100.0
+            report_progress("simulation", "Simulation complete")
         except Exception as exc:
             errors["backtest"] = f"{type(exc).__name__}: {exc}"
+            report_progress("simulation", "Simulation unavailable")
 
     # --- Combine ----------------------------------------------------------
     legs = {
@@ -208,6 +242,8 @@ def analyze(
         f"{symbol}: {verdict} (score {score:+.2f}, confidence {confidence:.0%} "
         f"from {len(reported)} of {len(WEIGHTS)} analysts)."
     )
+
+    report_progress("done", f"{verdict.capitalize()} (score {score:+.2f})")
 
     return ResearchReport(
         symbol=symbol,

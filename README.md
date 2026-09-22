@@ -8,10 +8,11 @@ It is a **research tool, not financial advice**, and it places no orders. That
 constraint is enforced in code, not just stated — see [Guardrails](#guardrails).
 
 ```powershell
-python research.py NVDA --html --simulate
+python serve.py              # web UI at localhost:8000
+python research.py NVDA --html --simulate    # or straight from the CLI
 ```
 
-<sub>Python 3.12 · ~6,900 lines · 273 tests · 9 runtime dependencies</sub>
+<sub>Python 3.12 · ~7,300 lines · 296 tests · 9 runtime dependencies</sub>
 
 ---
 
@@ -193,7 +194,7 @@ that is the rule most costly to get wrong.
 
 ## Engineering notes
 
-**273 tests, ~2,000 lines of test code.** Statistical functions are checked
+**296 tests, ~2,300 lines of test code.** Statistical functions are checked
 against published tables; indicator maths against synthetic series with known
 properties. Several tests are explicit regressions for bugs that only appeared
 against live data:
@@ -238,6 +239,27 @@ no credentials at all.
 
 ## Usage
 
+### Web UI
+
+```powershell
+python serve.py
+python serve.py --port 9000 --no-open
+```
+
+Type a ticker, watch each analyst report in as it finishes, and land on the
+report when it completes. Progress streams over Server-Sent Events, because a
+full run takes one to three minutes — almost entirely rate-limit sleeping — and
+a page that sits silent for that long reads as a hang.
+
+Built on `http.server` from the standard library rather than Flask: the whole
+server is one handler with four routes, and a framework would be more dependency
+than code. **It binds to 127.0.0.1 only.** That is a deliberate constraint rather
+than a default — the process holds API credentials and will fetch whatever it is
+asked to, so it must not be reachable from the network. There is no
+authentication because there is no remote access to authenticate.
+
+### Command line
+
 ```powershell
 python research.py AAPL                      # terminal report
 python research.py AAPL MSFT NVDA            # several symbols
@@ -274,6 +296,8 @@ backtests/
   signal_study.py       do the signals relate to returns at all?
 common/rate_limit.py    shared per-provider limiters
 config/settings.py      credentials and allowlist loading
+serve.py                local web UI, stdlib http.server + SSE
+research.py             command-line entry point
 ```
 
 ## Not yet implemented
