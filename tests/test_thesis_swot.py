@@ -268,6 +268,23 @@ class TestHtmlRendering:
         assert "NIKOLAY GELSHTEIN" in html
         assert "Nikolay Gelshtein" in html  # title and footer
 
+    def test_no_dash_separators_in_rendered_output(self):
+        """Titles and body copy use colons or full stops, never dashes.
+
+        Covers " -- ", the &mdash; entity and a literal em dash: all three have
+        appeared in this file at some point.
+        """
+        from agents.html_report import render_report
+        from agents.research_report import ResearchReport
+
+        html = render_report(
+            ResearchReport(symbol="TEST", verdict="mixed", score=0.0, confidence=0.5)
+        )
+        body = html.split("</style>", 1)[-1]
+        assert " -- " not in body
+        assert "&mdash;" not in body
+        assert "—" not in body
+
     def test_no_double_dashes_in_rendered_prose(self):
         """Visible copy uses em dashes; ' -- ' must not reach the page.
 

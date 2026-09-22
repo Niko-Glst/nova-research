@@ -280,7 +280,7 @@ def _thesis_section(report: ResearchReport) -> str:
     <section class="card">
       <h2>Investment thesis</h2>
       <p class="lede">{_esc(thesis.summary)}</p>
-      <p class="muted-text">Stance: <strong>{_esc(thesis.stance)}</strong> &mdash;
+      <p class="muted-text">Stance: <strong>{_esc(thesis.stance)}</strong>.
          {thesis.conditions_met} of {thesis.conditions_total} measurable conditions met.</p>
       <h3>What must be true</h3>
       <ul class="conditions">{"".join(items)}</ul>
@@ -351,7 +351,7 @@ def _peer_section(report: ResearchReport) -> str:
 
     return f"""
     <section class="card">
-      <h2>Peer comparison &mdash; {_esc(peers.niche)}</h2>
+      <h2>Peer comparison: {_esc(peers.niche)}</h2>
       <p class="muted-text">{len(peers.peers_used)} {scope} peers:
          {_esc(", ".join(peers.peers_used))}. Each bar is this company's value
          divided by the peer median. Green marks the favourable direction, which
@@ -602,7 +602,7 @@ def _eps_peer_section(report: ResearchReport) -> str:
 
     return f"""
     <section class="card">
-      <h2>Peer detail &mdash; {_esc(peers.niche)}</h2>
+      <h2>Peer detail: {_esc(peers.niche)}</h2>
       <p class="muted-text">Per-peer values with {_esc(report.symbol)}
          highlighted. Shows the dispersion behind the median.</p>
       <div class="chart-grid">{"".join(charts)}</div>
@@ -684,7 +684,7 @@ def _simulation_section(report: ResearchReport) -> str:
         )
 
         mc_block = f"""
-        <h3>Monte Carlo &mdash; {simulation.num_simulations:,} resampled paths</h3>
+        <h3>Monte Carlo: {simulation.num_simulations:,} resampled paths</h3>
         <p class="muted-text">{_term("Monte Carlo")} resampling of the
            strategy's realised daily returns via
            {_term("block bootstrap")}, which preserves volatility clustering.
