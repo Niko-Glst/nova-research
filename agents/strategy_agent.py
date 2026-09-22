@@ -5,7 +5,7 @@ boolean Series aligned to the price index, consumable by
 backtests/backtest_engine.py. This module never places a real order; it only
 emits research signals.
 
-Two strategies are provided, both computed from the same indicators the
+Three strategies are provided, all computed from the same indicators the
 technical analyst uses, so a backtest is testing the pipeline's own logic rather
 than an unrelated rule:
 
@@ -14,6 +14,8 @@ than an unrelated rule:
   anything else against.
 - `thesis_signals`: enters when the technical read turns constructive and the
   trend regime agrees, exits when either fails.
+- `donchian_breakout`: Turtle-style channel breakout, with a volume filter so a
+  new high on thin trading does not count as a breakout.
 
 Every signal here is computed from data available *at that bar*, and the
 backtest shifts them forward one bar before trading. Between them, that keeps
@@ -27,13 +29,17 @@ from dataclasses import dataclass
 import pandas as pd
 
 from agents.ta_analyst import (
+    DONCHIAN_PERIOD,
     MACD_NOISE_FLOOR_PCT,
     RSI_OVERBOUGHT,
     RSI_PERIOD,
     SMA_FAST,
     SMA_SLOW,
+    VOLUME_SURGE_RATIO,
+    _donchian,
     _macd,
     _rsi,
+    _volume_ratio,
 )
 
 
@@ -134,6 +140,64 @@ def thesis_signals(price_history: pd.DataFrame, symbol: str = "") -> StrategySig
     )
 
 
+def donchian_breakout(
+    price_history: pd.DataFrame,
+    symbol: str = "",
+    entry_period: int = DONCHIAN_PERIOD,
+    exit_period: int = 10,
+    require_volume: bool = True,
+) -> StrategySignals:
+    """Classic Turtle-style breakout: buy new highs, exit on a shorter-window low.
+
+    Entry and exit use different windows on purpose. A symmetric channel exits
+    a position at the same level it would re-enter, which churns; a shorter exit
+    window (10 days against 20) gets out of a failing breakout sooner while
+    still letting a working one run.
+
+    With `require_volume`, a breakout must also come on above-average volume.
+    A new high on thin volume is a handful of trades finding no sellers, not a
+    change in demand -- filtering those out is the main thing that separates a
+    breakout system from a noise generator.
+    """
+    close = price_history["Close"].astype(float)
+    high = price_history.get("High", close).astype(float)
+    low = price_history.get("Low", close).astype(float)
+
+    entry_upper, _ = _donchian(high, low, entry_period)
+    _, exit_lower = _donchian(high, low, exit_period)
+
+    breaking_out = close > entry_upper
+    breaking_down = close < exit_lower
+
+    if require_volume and "Volume" in price_history.columns:
+        ratio = _volume_ratio(price_history["Volume"].astype(float))
+        confirmed = ratio >= VOLUME_SURGE_RATIO
+        breaking_out &= confirmed.fillna(False)
+
+    # Fire on the first bar of a break, not on every bar above the channel.
+    entries = breaking_out & ~breaking_out.shift(1, fill_value=False)
+    exits = breaking_down & ~breaking_down.shift(1, fill_value=False)
+
+    valid = entry_upper.notna() & exit_lower.notna()
+    entries &= valid
+    exits &= valid
+
+    volume_note = (
+        f" Breakouts require volume at {VOLUME_SURGE_RATIO:.1f}x its average."
+        if require_volume
+        else ""
+    )
+    return StrategySignals(
+        symbol=symbol,
+        entries=entries.fillna(False),
+        exits=exits.fillna(False),
+        rationale=(
+            f"Enter on a close above the {entry_period}-day Donchian high; exit "
+            f"on a close below the {exit_period}-day low.{volume_note}"
+        ),
+    )
+
+
 def generate_signals(
     symbol: str, thesis: dict, price_history: pd.DataFrame
 ) -> StrategySignals:
@@ -146,4 +210,6 @@ def generate_signals(
     strategy = (thesis or {}).get("strategy", "thesis")
     if strategy == "crossover":
         return moving_average_crossover(price_history, symbol=symbol)
+    if strategy == "breakout":
+        return donchian_breakout(price_history, symbol=symbol)
     return thesis_signals(price_history, symbol=symbol)

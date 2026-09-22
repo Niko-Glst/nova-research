@@ -158,3 +158,140 @@ class TestFetchValidation:
     def test_blank_symbol_is_rejected_before_any_request(self):
         with pytest.raises(ValueError, match="non-empty"):
             ta_analyst.fetch_price_history("   ")
+
+
+class TestDonchianChannel:
+    def test_channel_excludes_the_current_bar(self):
+        """Otherwise a new high would always equal its own upper channel."""
+        closes = [100.0] * 20 + [150.0]
+        frame = _price_frame(closes)
+        upper, _ = ta_analyst._donchian(frame["High"], frame["Low"], period=20)
+        # The last bar's channel describes the 20 bars before it, all at ~100.
+        assert upper.iloc[-1] < 150.0
+        assert frame["Close"].iloc[-1] > upper.iloc[-1]
+
+    def test_upper_tracks_the_prior_high(self):
+        frame = _price_frame(list(np.linspace(100, 120, 40)))
+        upper, lower = ta_analyst._donchian(frame["High"], frame["Low"], period=10)
+        assert upper.iloc[-1] > lower.iloc[-1]
+
+    def test_insufficient_history_yields_nan(self):
+        frame = _price_frame([100.0, 101.0, 102.0])
+        upper, _ = ta_analyst._donchian(frame["High"], frame["Low"], period=20)
+        assert pd.isna(upper.iloc[-1])
+
+
+class TestVolumeRatio:
+    def test_steady_volume_reads_about_one(self):
+        volume = pd.Series([1_000_000.0] * 40)
+        assert ta_analyst._volume_ratio(volume, period=20).iloc[-1] == pytest.approx(1.0)
+
+    def test_surge_is_detected(self):
+        volume = pd.Series([1_000_000.0] * 30 + [3_000_000.0])
+        assert ta_analyst._volume_ratio(volume, period=20).iloc[-1] == pytest.approx(3.0)
+
+    def test_average_excludes_today(self):
+        """Including today would dampen exactly the spike being measured."""
+        volume = pd.Series([1_000_000.0] * 20 + [10_000_000.0])
+        ratio = ta_analyst._volume_ratio(volume, period=20).iloc[-1]
+        assert ratio == pytest.approx(10.0)
+
+    def test_zero_average_does_not_divide_by_zero(self):
+        volume = pd.Series([0.0] * 20 + [500.0])
+        assert pd.isna(ta_analyst._volume_ratio(volume, period=20).iloc[-1])
+
+
+class TestWeightOrdering:
+    def test_macd_is_the_smallest_vote(self):
+        """MACD lags and flips on small moves, so it must not outrank trend."""
+        assert ta_analyst.WEIGHT_MACD < ta_analyst.WEIGHT_RSI
+        assert ta_analyst.WEIGHT_MACD < ta_analyst.WEIGHT_VOLUME
+        assert ta_analyst.WEIGHT_MACD < ta_analyst.WEIGHT_DONCHIAN
+
+    def test_volume_and_breakout_outrank_oscillators(self):
+        assert ta_analyst.WEIGHT_VOLUME > ta_analyst.WEIGHT_RSI
+        assert ta_analyst.WEIGHT_DONCHIAN > ta_analyst.WEIGHT_RSI
+
+    def test_trend_still_outranks_everything(self):
+        for weight in (
+            ta_analyst.WEIGHT_DONCHIAN,
+            ta_analyst.WEIGHT_VOLUME,
+            ta_analyst.WEIGHT_RSI,
+            ta_analyst.WEIGHT_MACD,
+        ):
+            assert ta_analyst.WEIGHT_PRICE_VS_SMA >= weight
+
+
+class TestClassifierWithNewSignals:
+    def _base(self) -> dict:
+        return {
+            "close": 110.0,
+            "sma_50": 100.0,
+            "sma_200": 95.0,
+            "rsi_14": 55.0,
+            "macd_histogram": 0.5,
+            "donchian_upper_20": 105.0,
+            "donchian_lower_20": 90.0,
+        }
+
+    def test_breakout_is_reported(self):
+        _, reasons = ta_analyst._classify(self._base())
+        assert any("broke above" in r for r in reasons)
+
+    def test_breakdown_is_reported(self):
+        indicators = self._base()
+        indicators.update({"close": 85.0, "sma_50": 100.0})
+        _, reasons = ta_analyst._classify(indicators)
+        assert any("broke below" in r for r in reasons)
+
+    def test_position_within_range_when_no_breakout(self):
+        indicators = self._base()
+        indicators["close"] = 97.0
+        _, reasons = ta_analyst._classify(indicators)
+        assert any("of the way up" in r for r in reasons)
+
+    def test_volume_surge_confirms_an_advance(self):
+        indicators = self._base()
+        indicators["volume_ratio"] = 2.5
+        signal, reasons = ta_analyst._classify(indicators)
+        assert signal == "bullish"
+        assert any("real participation" in r for r in reasons)
+
+    def test_thin_volume_argues_against_the_move(self):
+        """A rally nobody participates in is weaker than the same rally on volume."""
+        strong = self._base()
+        strong["volume_ratio"] = 2.5
+        thin = self._base()
+        thin["volume_ratio"] = 0.3
+
+        _, thin_reasons = ta_analyst._classify(thin)
+        assert any("lacks conviction" in r for r in thin_reasons)
+
+    def test_volume_surge_on_a_decline_is_bearish(self):
+        """Heavy volume is only bullish if price is rising on it."""
+        indicators = {
+            "close": 85.0,
+            "sma_50": 100.0,
+            "sma_200": 110.0,
+            "rsi_14": 45.0,
+            "macd_histogram": -0.5,
+            "donchian_upper_20": 120.0,
+            "donchian_lower_20": 90.0,
+            "volume_ratio": 3.0,
+        }
+        signal, reasons = ta_analyst._classify(indicators)
+        assert signal == "bearish"
+        assert any("the decline" in r for r in reasons)
+
+    def test_macd_alone_cannot_flip_the_verdict(self):
+        """Regression: MACD used to carry the same weight as the trend checks."""
+        bearish_trend = {
+            "close": 90.0,
+            "sma_50": 100.0,
+            "sma_200": 110.0,
+            "rsi_14": 50.0,
+            "macd_histogram": 5.0,  # strongly positive
+            "donchian_upper_20": 120.0,
+            "donchian_lower_20": 85.0,
+        }
+        assert ta_analyst._classify(bearish_trend)[0] == "bearish"

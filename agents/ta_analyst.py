@@ -29,13 +29,41 @@ MACD_SIGNAL = 9
 RSI_OVERBOUGHT = 70.0
 RSI_OVERSOLD = 30.0
 
-# Vote weights for the classifier. Trend evidence outranks oscillators: where
-# price sits relative to its own averages is a more durable read than a MACD
-# crossover, which flips on small moves.
+# Donchian channel lookback, in trading days. 20 is the classic Turtle-system
+# window: long enough that a break means something, short enough to still be
+# tradable. The breakout is measured against the prior N bars, excluding today,
+# so "price made a new 20-day high" cannot be true by construction.
+DONCHIAN_PERIOD = 20
+
+# Volume confirmation windows. Today's volume is compared against its own
+# recent average; a move on heavy volume carries conviction that the same move
+# on thin volume does not.
+VOLUME_PERIOD = 20
+VOLUME_SURGE_RATIO = 1.5   # >= this much of average is a conviction move
+VOLUME_WEAK_RATIO = 0.6    # <= this much means the move lacks participation
+
+# Vote weights for the classifier.
+#
+# Trend evidence outranks everything: where price sits relative to its own
+# averages is the most durable read available from price alone.
+#
+# Volume and Donchian rank above the oscillators. Volume shows conviction --
+# whether anyone actually acted on the move -- which a price-only indicator
+# cannot see. A Donchian break is an unambiguous, non-lagging statement that
+# price has left its recent range, where MACD only reports that two averages
+# crossed some time ago.
+#
+# MACD is deliberately the smallest vote. It is a lagging function of two
+# exponential averages, it flips on small moves, and in this project's own
+# signal study it was the component most prone to firing on noise. It is kept
+# because a momentum cross adds something at the margin, not because it earns
+# equal standing with the trend.
 WEIGHT_PRICE_VS_SMA = 1.5
 WEIGHT_SMA_CROSS = 1.5
-WEIGHT_RSI = 1.0
-WEIGHT_MACD = 1.0
+WEIGHT_DONCHIAN = 1.25
+WEIGHT_VOLUME = 1.0
+WEIGHT_RSI = 0.75
+WEIGHT_MACD = 0.5
 
 # A MACD histogram this small relative to price is noise, not momentum. Without
 # this floor, a histogram of +0.01 on a $16 stock casts a full bullish vote.
@@ -91,6 +119,32 @@ def _rsi(close: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
     return rsi.fillna(100.0).where(avg_gain.notna(), other=float("nan"))
 
 
+def _donchian(
+    high: pd.Series, low: pd.Series, period: int = DONCHIAN_PERIOD
+) -> tuple[pd.Series, pd.Series]:
+    """Upper and lower Donchian channel over the PRIOR `period` bars.
+
+    The window is shifted by one bar so today's own high and low are excluded.
+    Without that shift the upper channel always equals today's high on a new
+    high, and "price broke out" would be trivially true whenever it happened to
+    be the highest bar -- the channel has to describe the range price is
+    breaking out *of*.
+    """
+    upper = high.rolling(period).max().shift(1)
+    lower = low.rolling(period).min().shift(1)
+    return upper, lower
+
+
+def _volume_ratio(volume: pd.Series, period: int = VOLUME_PERIOD) -> pd.Series:
+    """Volume as a multiple of its own trailing average, excluding today.
+
+    Today is excluded from the average for the same reason as the Donchian
+    window: including it dampens exactly the spike being measured.
+    """
+    average = volume.rolling(period).mean().shift(1)
+    return volume / average.replace(0.0, pd.NA)
+
+
 def _macd(close: pd.Series) -> tuple[pd.Series, pd.Series]:
     """Return the MACD line and its signal line."""
     ema_fast = close.ewm(span=MACD_FAST, adjust=False).mean()
@@ -112,6 +166,13 @@ def compute_indicators(price_history: pd.DataFrame) -> dict[str, float]:
     close = price_history["Close"].astype(float)
     macd_line, macd_signal = _macd(close)
 
+    # High/low drive the Donchian channel; fall back to close when a provider
+    # omits them, which turns the channel into a close-based range rather than
+    # dropping the indicator entirely.
+    high = price_history.get("High", close).astype(float)
+    low = price_history.get("Low", close).astype(float)
+    donchian_upper, donchian_lower = _donchian(high, low)
+
     series: dict[str, pd.Series] = {
         "close": close,
         f"sma_{SMA_FAST}": close.rolling(SMA_FAST).mean(),
@@ -120,7 +181,15 @@ def compute_indicators(price_history: pd.DataFrame) -> dict[str, float]:
         "macd": macd_line,
         "macd_signal": macd_signal,
         "macd_histogram": macd_line - macd_signal,
+        f"donchian_upper_{DONCHIAN_PERIOD}": donchian_upper,
+        f"donchian_lower_{DONCHIAN_PERIOD}": donchian_lower,
     }
+
+    if "Volume" in price_history.columns:
+        volume = price_history["Volume"].astype(float)
+        series["volume"] = volume
+        series[f"volume_avg_{VOLUME_PERIOD}"] = volume.rolling(VOLUME_PERIOD).mean()
+        series["volume_ratio"] = _volume_ratio(volume)
 
     indicators: dict[str, float] = {}
     for name, values in series.items():
@@ -173,6 +242,60 @@ def _classify(indicators: dict[str, float]) -> tuple[str, list[str]]:
             score -= WEIGHT_SMA_CROSS
             reasons.append(
                 f"{SMA_FAST}-day average is below the {SMA_SLOW}-day (death-cross regime)."
+            )
+
+    # Donchian breakout: has price left the range it has held for 20 days?
+    upper = indicators.get(f"donchian_upper_{DONCHIAN_PERIOD}")
+    lower = indicators.get(f"donchian_lower_{DONCHIAN_PERIOD}")
+    if close is not None and upper is not None and lower is not None:
+        cast += WEIGHT_DONCHIAN
+        if close > upper:
+            score += WEIGHT_DONCHIAN
+            reasons.append(
+                f"Price broke above its {DONCHIAN_PERIOD}-day high "
+                f"({upper:.2f}): a breakout from the recent range."
+            )
+        elif close < lower:
+            score -= WEIGHT_DONCHIAN
+            reasons.append(
+                f"Price broke below its {DONCHIAN_PERIOD}-day low "
+                f"({lower:.2f}): a breakdown from the recent range."
+            )
+        else:
+            position = (
+                (close - lower) / (upper - lower) if upper > lower else 0.5
+            )
+            reasons.append(
+                f"Price sits {position:.0%} of the way up its "
+                f"{DONCHIAN_PERIOD}-day range, with no breakout."
+            )
+
+    # Volume confirmation: conviction behind the move, not the move itself.
+    # This votes with the direction of the day rather than on its own, because
+    # heavy volume is only bullish if price is rising on it.
+    volume_ratio = indicators.get("volume_ratio")
+    if volume_ratio is not None and close is not None and sma_fast is not None:
+        cast += WEIGHT_VOLUME
+        direction = 1.0 if close > sma_fast else -1.0
+        if volume_ratio >= VOLUME_SURGE_RATIO:
+            score += WEIGHT_VOLUME * direction
+            reasons.append(
+                f"Volume is {volume_ratio:.1f}x its {VOLUME_PERIOD}-day average: "
+                f"real participation behind "
+                f"{'the advance' if direction > 0 else 'the decline'}."
+            )
+        elif volume_ratio <= VOLUME_WEAK_RATIO:
+            # Thin volume argues against whatever the trend is claiming, so it
+            # votes against the prevailing direction rather than with it.
+            score -= WEIGHT_VOLUME * direction * 0.5
+            reasons.append(
+                f"Volume is only {volume_ratio:.1f}x its {VOLUME_PERIOD}-day "
+                f"average: the move lacks conviction."
+            )
+        else:
+            reasons.append(
+                f"Volume is {volume_ratio:.1f}x its {VOLUME_PERIOD}-day average "
+                f"(unremarkable)."
             )
 
     rsi = indicators.get(f"rsi_{RSI_PERIOD}")
