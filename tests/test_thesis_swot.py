@@ -328,6 +328,7 @@ class TestHtmlRendering:
             sentiment=SentimentRead(
                 symbol="TEST", reddit_score=0.0, news_score=0.4, sample_size=1,
                 notes="", signal="bullish", news_sample=1, news_detail=detail,
+                news_articles=detail.top_positive,
             ),
         )
 
@@ -335,6 +336,52 @@ class TestHtmlRendering:
         assert 'href="https://example.com/story"' in html
         assert 'rel="noopener noreferrer"' in html
         assert "Reuters" in html
+
+    def test_every_source_is_listed_with_reddit_query(self):
+        """Not only the extremes: neutral items and Reddit posts appear too."""
+        from agents.html_report import _sentiment_section
+        from agents.news_signal import Headline
+        from agents.research_report import ResearchReport
+        from agents.sentiment_analyst import SentimentRead
+
+        report = ResearchReport(
+            symbol="TEST", verdict="positive", score=0.5, confidence=1.0,
+            sentiment=SentimentRead(
+                symbol="TEST", reddit_score=0.5, news_score=0.0, sample_size=2,
+                notes="", signal="bullish", reddit_sample=1, news_sample=1,
+                reddit_query='"Test Corp"',
+                reddit_posts=[
+                    Headline(title="Thoughts on Test Corp?", url="https://www.reddit.com/r/stocks/x",
+                             source="r/stocks · 12 upvotes", score=0.5, age_days=2.0)
+                ],
+                news_articles=[
+                    Headline(title="Test Corp holds AGM", url="", source="Reuters", score=0.0)
+                ],
+            ),
+        )
+
+        html = _sentiment_section(report)
+        assert "Reddit posts (1)" in html and "News articles (1)" in html
+        assert 'href="https://www.reddit.com/r/stocks/x"' in html
+        assert "Test Corp holds AGM" in html and "no scored terms" in html
+        assert "&quot;Test Corp&quot;" in html
+
+    def test_empty_source_lists_say_so(self):
+        from agents.html_report import _sentiment_section
+        from agents.research_report import ResearchReport
+        from agents.sentiment_analyst import SentimentRead
+
+        report = ResearchReport(
+            symbol="TEST", verdict="mixed", score=0.0, confidence=0.5,
+            sentiment=SentimentRead(
+                symbol="TEST", reddit_score=0.0, news_score=0.0, sample_size=0,
+                notes="", signal="unknown",
+            ),
+        )
+
+        html = _sentiment_section(report)
+        assert "Reddit posts (0)" in html and "No Reddit posts matched" in html
+        assert "News articles (0)" in html
 
     def test_headline_without_url_still_renders(self):
         """A provider may omit the link; the title must survive regardless."""
@@ -360,6 +407,7 @@ class TestHtmlRendering:
             sentiment=SentimentRead(
                 symbol="TEST", reddit_score=0.0, news_score=-0.4, sample_size=1,
                 notes="", signal="bearish", news_sample=1, news_detail=detail,
+                news_articles=detail.top_negative,
             ),
         )
 
@@ -396,6 +444,7 @@ class TestHtmlRendering:
             sentiment=SentimentRead(
                 symbol="TEST", reddit_score=0.0, news_score=0.4, sample_size=1,
                 notes="", signal="bullish", news_sample=1, news_detail=detail,
+                news_articles=detail.top_positive,
             ),
         )
 

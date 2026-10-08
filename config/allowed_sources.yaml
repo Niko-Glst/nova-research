@@ -97,6 +97,16 @@ peer_groups:
   # different businesses -- read the per-peer bars rather than the median alone.
   # (IPG was dropped: it no longer resolves after the Omnicom merger.)
   advertising_agencies: [TTD, OMC, MGNI, DV, IAS, CRTO]
+  # Electrification and power-management names. yfinance splits this business
+  # across two labels (Schneider, Siemens and Eaton are "Specialty Industrial
+  # Machinery"; ABB, Legrand, Vertiv and Hubbell are "Electrical Equipment &
+  # Parts"), so both keys point at the same set. The machinery label also covers
+  # unrelated names such as pumps and compressors -- this group is curated for
+  # the electrification players, and the sector fallback (CAT, BA, ...) would be
+  # a worse comparison still. Mixed currencies are fine: every metric compared
+  # is a ratio or a percentage.
+  specialty_industrial_machinery: [SU.PA, SIE.DE, ABBN.SW, ETN, LR.PA, VRT, HUBB]
+  electrical_equipment_parts: [SU.PA, SIE.DE, ABBN.SW, ETN, LR.PA, VRT, HUBB]
 
 default_peers_by_sector:
   technology: [AAPL, MSFT, NVDA, GOOGL, AVGO]

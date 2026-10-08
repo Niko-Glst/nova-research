@@ -88,6 +88,38 @@ class TestScoreSentiment:
         assert sa.score_sentiment([{"title": "stock surges"}]) > 0
 
 
+class TestRedditSearchQuery:
+    def test_us_ticker_is_searched_as_is(self):
+        assert sa.reddit_search_query("aapl", "Apple Inc.") == "AAPL"
+
+    def test_suffixed_ticker_is_searched_by_name(self):
+        assert sa.reddit_search_query("SU.PA", "Schneider Electric S.E.") == '"Schneider Electric"'
+
+    def test_stacked_legal_suffixes_are_stripped(self):
+        assert sa.reddit_search_query("X.DE", "Example Holding AG") == '"Example"'
+
+    def test_suffixed_ticker_without_name_falls_back_to_symbol(self):
+        assert sa.reddit_search_query("SU.PA", "") == "SU.PA"
+
+
+class TestSourceLines:
+    def test_reddit_posts_keep_link_score_and_age(self):
+        import time
+
+        posts = sa._reddit_headlines([
+            {"title": "old post", "body": "", "weight": 3, "source": "r/stocks",
+             "url": "https://www.reddit.com/r/stocks/a", "created_utc": time.time() - 5 * 86_400},
+            {"title": "shares surge on record profit", "body": "", "weight": 40,
+             "source": "r/investing", "url": "https://www.reddit.com/r/investing/b",
+             "created_utc": time.time() - 86_400},
+        ])
+        assert [p.title for p in posts] == ["shares surge on record profit", "old post"]
+        assert posts[0].url == "https://www.reddit.com/r/investing/b"
+        assert posts[0].score > 0 and posts[1].score == 0
+        assert "40 upvotes" in posts[0].source
+        assert round(posts[0].age_days) == 1
+
+
 class TestAllowlistEnforcement:
     def test_unlisted_subreddit_is_refused(self):
         """SECURITY.md rule 3: no fetching from sources outside the allowlist."""

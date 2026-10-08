@@ -15,10 +15,9 @@ import json
 import sys
 import webbrowser
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
 from pathlib import Path
 
-from agents import html_report, research_report
+from agents import report_archive, research_report
 
 
 def _to_jsonable(value):
@@ -86,13 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _write_html(report, directory: str) -> Path:
-    """Render one report to an HTML file and return its path."""
-    out_dir = Path(directory)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    path = out_dir / f"{report.symbol}.html"
-    path.write_text(html_report.render_report(report, stamp), encoding="utf-8")
-    return path
+    """Render one report to HTML, archive a dated copy, and return its path."""
+    return report_archive.save_report(report, directory)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -124,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.html:
             path = _write_html(report, args.html)
             print(f"HTML report written to {path}")
+            print(f"All saved reports: {Path(args.html) / report_archive.INDEX_FILE}")
             if not args.no_open:
                 webbrowser.open(path.resolve().as_uri())
 

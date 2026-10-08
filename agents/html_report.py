@@ -509,39 +509,53 @@ def _sentiment_section(report: ResearchReport) -> str:
         </div>
         <p class="muted-text">{_esc(volume.notes)}</p>"""
 
-    headlines = ""
-    if detail is not None and (detail.top_positive or detail.top_negative):
-
-        def _headline_item(headline, tone: str) -> str:
-            meta_parts = []
-            if headline.source:
-                meta_parts.append(_esc(headline.source))
-            if headline.age_days is not None:
-                meta_parts.append(
-                    "today" if headline.age_days < 1 else f"{headline.age_days:.0f}d ago"
-                )
-            meta = (
-                f'<span class="headline-meta">{" &middot; ".join(meta_parts)}</span>'
-                if meta_parts
-                else ""
+    def _headline_item(headline) -> str:
+        meta_parts = []
+        if headline.source:
+            meta_parts.append(_esc(headline.source))
+        if headline.age_days is not None:
+            meta_parts.append(
+                "today" if headline.age_days < 1 else f"{headline.age_days:.0f}d ago"
             )
-            title = _esc(headline.title)
-            # rel="noopener" keeps the opened tab from reaching back into this
-            # page; noreferrer avoids leaking the local file path as a referrer.
-            body = (
-                f'<a href="{_esc(headline.url)}" target="_blank" '
-                f'rel="noopener noreferrer">{title}</a>'
-                if headline.url
-                else title
-            )
-            return f'<li class="{tone}">{body}{meta}</li>'
-
-        pos = "".join(_headline_item(h, "good") for h in detail.top_positive)
-        neg = "".join(_headline_item(h, "bad") for h in detail.top_negative)
-        headlines = (
-            '<h3>Headlines</h3>'
-            f'<ul class="headlines">{pos}{neg}</ul>'
+        meta_parts.append(
+            f"score {headline.score:+.2f}" if headline.score else "no scored terms"
         )
+        meta = f'<span class="headline-meta">{" &middot; ".join(meta_parts)}</span>'
+        title = _esc(headline.title)
+        # rel="noopener" keeps the opened tab from reaching back into this
+        # page; noreferrer avoids leaking the local file path as a referrer.
+        body = (
+            f'<a href="{_esc(headline.url)}" target="_blank" '
+            f'rel="noopener noreferrer">{title}</a>'
+            if headline.url
+            else title
+        )
+        tone = "good" if headline.score > 0 else "bad" if headline.score < 0 else ""
+        return f'<li class="{tone}">{body}{meta}</li>'
+
+    def _source_list(heading: str, items, empty: str) -> str:
+        if not items:
+            return f'<h3>{heading} (0)</h3><p class="muted-text">{_esc(empty)}</p>'
+        rows = "".join(_headline_item(h) for h in items)
+        return f'<h3>{heading} ({len(items)})</h3><ul class="headlines">{rows}</ul>'
+
+    # Every source is listed, not just the extremes: with a handful of items
+    # the reader needs to see whether they are even about this company.
+    query_note = (
+        f"Reddit search: {_esc(sentiment.reddit_query)}, past month."
+        if sentiment.reddit_query
+        else ""
+    )
+    headlines = (
+        "<h3>Sources</h3>"
+        f'<p class="muted-text">Every item that fed the sentiment score. {query_note}</p>'
+        + _source_list(
+            "Reddit posts", sentiment.reddit_posts, "No Reddit posts matched the search."
+        )
+        + _source_list(
+            "News articles", sentiment.news_articles, "No news articles were available."
+        )
+    )
 
     reasons = "".join(f"<li>{_esc(r)}</li>" for r in sentiment.reasons)
 

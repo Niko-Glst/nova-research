@@ -87,6 +87,7 @@ class FundamentalRead:
     notes: str
     reasons: list[str] = field(default_factory=list)
     peer_comparison: PeerComparison | None = None
+    name: str = ""  # company name, e.g. for searching sources that don't use tickers
 
 
 def _normalize_key(text: str) -> str:
@@ -421,4 +422,5 @@ def analyze(symbol: str, include_peers: bool = True) -> FundamentalRead:
         notes=notes,
         reasons=reasons,
         peer_comparison=peer_comparison,
+        name=str(raw.get("_name") or ""),
     )

@@ -24,6 +24,7 @@ source should degrade the read, not break the pipeline.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 
 from agents import news_signal, news_sources
@@ -84,6 +85,11 @@ class SentimentRead:
     reasons: list[str] = field(default_factory=list)
     news_detail: news_signal.NewsSignal | None = None
     news_provider: str = ""
+    # Every item that fed the score, so a reader can check the evidence rather
+    # than trust the number. Reddit posts carry their permalink.
+    reddit_posts: list[news_signal.Headline] = field(default_factory=list)
+    news_articles: list[news_signal.Headline] = field(default_factory=list)
+    reddit_query: str = ""
 
 
 def _lookup(token: str) -> float | None:
@@ -166,10 +172,46 @@ def score_sentiment(mentions: list[dict]) -> float:
     return max(-1.0, min(1.0, weighted_total / weight_total))
 
 
+# Legal-form suffixes stripped from a company name before searching Reddit:
+# nobody writes "Schneider Electric S.E." in a post title.
+_LEGAL_SUFFIX = re.compile(
+    r"[\s,]+(s\.?e|s\.?a|a\.?g|aktiengesellschaft|plc|n\.?v|ltd|inc|corp|"
+    r"corporation|co|company|holdings?|group)\.?$",
+    re.IGNORECASE,
+)
+
+
+def reddit_search_query(symbol: str, company_name: str = "") -> str:
+    """The Reddit search string for a symbol.
+
+    A US ticker is how people write about the stock, so it is searched as-is.
+    An exchange-suffixed ticker ("SU.PA", "SIE.DE") is not -- searching for it
+    returns nothing -- and its bare root ("SU") is too ambiguous to search, so
+    those are searched by quoted company name instead.
+    """
+    symbol = symbol.strip().upper()
+    if "." not in symbol or not company_name.strip():
+        return symbol
+
+    name = company_name.strip()
+    while True:
+        stripped = _LEGAL_SUFFIX.sub("", name).strip()
+        if stripped == name or not stripped:
+            break
+        name = stripped
+    return f'"{name}"'
+
+
 def fetch_reddit_mentions(
-    symbol: str, subreddits: list[str], limit: int = DEFAULT_POST_LIMIT
+    symbol: str,
+    subreddits: list[str],
+    limit: int = DEFAULT_POST_LIMIT,
+    query: str | None = None,
 ) -> list[dict]:
     """Fetch recent mentions of a symbol from the given (allowlisted) subreddits.
+
+    `query` overrides the search string (see reddit_search_query); by default
+    the symbol itself is searched.
 
     Raises ValueError if a subreddit is not on the allowlist, or if credentials
     are missing -- the caller decides whether that is fatal.
@@ -196,7 +238,7 @@ def fetch_reddit_mentions(
     )
 
     mentions: list[dict] = []
-    query = f"{symbol}"
+    query = query or f"{symbol}"
 
     for subreddit in requested:
         get_limiter("reddit").wait()
@@ -205,12 +247,15 @@ def fetch_reddit_mentions(
                 query, sort="new", time_filter="month", limit=limit
             )
             for post in results:
+                permalink = getattr(post, "permalink", "") or ""
                 mentions.append(
                     {
                         "title": post.title,
                         "body": (post.selftext or "")[:2000],
                         "weight": getattr(post, "score", 0),
                         "source": f"r/{subreddit}",
+                        "url": f"https://www.reddit.com{permalink}" if permalink else "",
+                        "created_utc": getattr(post, "created_utc", None),
                     }
                 )
         except Exception:
@@ -218,6 +263,41 @@ def fetch_reddit_mentions(
             continue
 
     return mentions
+
+
+def _reddit_headlines(mentions: list[dict]) -> list[news_signal.Headline]:
+    """Each Reddit post as a scored, linked source line, newest first."""
+    now = time.time()
+    out = []
+    for mention in mentions:
+        created = mention.get("created_utc")
+        age = max(0.0, (now - float(created)) / 86_400) if created else None
+        upvotes = int(mention.get("weight", 0) or 0)
+        out.append(
+            news_signal.Headline(
+                title=mention.get("title", ""),
+                url=mention.get("url", ""),
+                source=f"{mention.get('source', 'reddit')} · {upvotes} upvotes",
+                score=score_text(f"{mention.get('title', '')} {mention.get('body', '')}"),
+                age_days=age,
+            )
+        )
+    return sorted(out, key=lambda h: h.age_days if h.age_days is not None else float("inf"))
+
+
+def _news_headlines(items: list[news_sources.NewsItem]) -> list[news_signal.Headline]:
+    """Each news article as a scored, linked source line, newest first."""
+    out = [
+        news_signal.Headline(
+            title=item.title,
+            url=item.url,
+            source=item.source,
+            score=score_text(f"{item.title} {item.body}".strip()),
+            age_days=item.age_days,
+        )
+        for item in items
+    ]
+    return sorted(out, key=lambda h: h.age_days if h.age_days is not None else float("inf"))
 
 
 def fetch_news_mentions(symbol: str, allowed_domains: list[str]) -> list[news_sources.NewsItem]:
@@ -234,6 +314,7 @@ def analyze(
     symbol: str,
     strict_allowlist: bool = True,
     half_life_days: float = news_signal.DEFAULT_HALF_LIFE_DAYS,
+    company_name: str = "",
 ) -> SentimentRead:
     """Run the full sentiment pipeline for a symbol.
 
@@ -256,8 +337,9 @@ def analyze(
 
     # --- Reddit -----------------------------------------------------------
     reddit_mentions: list[dict] = []
+    reddit_query = reddit_search_query(symbol, company_name)
     try:
-        reddit_mentions = fetch_reddit_mentions(symbol, subreddits)
+        reddit_mentions = fetch_reddit_mentions(symbol, subreddits, query=reddit_query)
     except ValueError as exc:
         unavailable.append(f"reddit ({exc.args[0].split('.')[0]})")
     except Exception as exc:
@@ -305,6 +387,7 @@ def analyze(
                 f"Unavailable: {', '.join(unavailable) or 'none'}."
             ),
             reasons=hints,
+            reddit_query=reddit_query,
         )
 
     # Weight each leg by how much evidence it actually carries.
@@ -351,4 +434,7 @@ def analyze(
         reasons=reasons,
         news_detail=detail,
         news_provider=provider,
+        reddit_posts=_reddit_headlines(reddit_mentions),
+        news_articles=_news_headlines(news_items),
+        reddit_query=reddit_query,
     )

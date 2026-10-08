@@ -144,7 +144,11 @@ def analyze(
     sentiment: sentiment_analyst.SentimentRead | None = None
     report_progress("sentiment", "Reading news and Reddit sentiment")
     try:
-        sentiment = sentiment_analyst.analyze(symbol, strict_allowlist=strict_allowlist)
+        sentiment = sentiment_analyst.analyze(
+            symbol,
+            strict_allowlist=strict_allowlist,
+            company_name=fundamental.name if fundamental else "",
+        )
         report_progress("sentiment", f"Sentiment read: {sentiment.signal}")
     except Exception as exc:
         errors["sentiment"] = f"{type(exc).__name__}: {exc}"
@@ -389,6 +393,19 @@ def format_report(report: ResearchReport) -> str:
             f"  Reddit score:     {sentiment.reddit_score:>+8.2f} "
             f"({sentiment.reddit_sample} posts)",
         ]
+
+        # Every source that fed the score, so the number can be checked.
+        for label, items in (
+            ("REDDIT POSTS", sentiment.reddit_posts),
+            ("NEWS ARTICLES", sentiment.news_articles),
+        ):
+            lines += ["", f"  {label} ({len(items)})"]
+            if label == "REDDIT POSTS" and sentiment.reddit_query:
+                lines.append(f"    search: {sentiment.reddit_query}, past month")
+            for item in items:
+                age = "" if item.age_days is None else f", {item.age_days:.0f}d ago"
+                lines.append(f"    [{item.score:+.2f}] {item.title}")
+                lines.append(f"            {item.source}{age}  {item.url}".rstrip())
 
         detail = sentiment.news_detail
         if detail is not None and detail.article_count:

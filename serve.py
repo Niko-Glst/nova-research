@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from agents import html_report, research_report
+from agents import html_report, report_archive, research_report
 
 # Ticker charset. Real symbols are letters with an optional dot or hyphen
 # (BRK.B, RDS-A); anything else is rejected before it reaches a provider.
@@ -401,14 +401,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def _write_report_file(report: research_report.ResearchReport) -> None:
     """Also save the report to reports/, matching what the CLI produces."""
-    from pathlib import Path
-
-    directory = Path("reports")
-    directory.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    (directory / f"{report.symbol}.html").write_text(
-        html_report.render_report(report, stamp), encoding="utf-8"
-    )
+    report_archive.save_report(report, "reports")
 
 
 def main(argv: list[str] | None = None) -> int:
