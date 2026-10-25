@@ -53,6 +53,29 @@ rss_feeds:
   - name: example_macro_feed
     url: https://example.com/rss/macro.xml  # placeholder — replace with a real, vetted feed
 
+# Official FX reference rates for the correlation module's base-currency view
+# (correlations/fred.py). Yahoo's FX history was rejected: its daily bars are
+# dated correctly until about 2010 and one day late afterwards, which no single
+# correction fixes. These are the Federal Reserve H.10 noon New York buying
+# rates, served by FRED as plain CSV (no API key). Only the listed series may
+# be fetched.
+fred:
+  url: https://fred.stlouisfed.org/graph/fredgraph.csv
+  series:
+    - DEXUSEU   # US dollars per euro
+    - DEXSZUS   # Swiss francs per US dollar
+    - DEXUSUK   # US dollars per pound sterling
+
+# SEC EDGAR (added 2026-10-22, owner's request): XBRL company facts for
+# point-in-time share counts and buyback/issuance cash flows of US filers. No
+# key; SEC requires a descriptive User-Agent with a contact email
+# (SEC_USER_AGENT in .env) and fewer than 10 requests per second. URLs and
+# tags live in config/scoring.yaml under flows.sec.
+sec:
+  hosts:
+    - www.sec.gov      # company_tickers.json (ticker -> CIK)
+    - data.sec.gov     # api/xbrl/companyfacts
+
 # Rate limiting defaults applied when fetching from the sources above.
 # Individual modules may override these but must not remove them.
 rate_limits:
@@ -105,6 +128,22 @@ peer_groups:
   # the electrification players, and the sector fallback (CAT, BA, ...) would be
   # a worse comparison still. Mixed currencies are fine: every metric compared
   # is a ratio or a percentage.
+  # Chip equipment. Listed closest first because max_peers truncates the list:
+  # BESI, Kulicke & Soffa and ASMPT compete head to head in advanced packaging
+  # (die attach, thermo-compression and hybrid bonding); ASM International,
+  # ASML, Applied Materials and Lam are front-end tools with a different
+  # cycle, kept as the broader reference.
+  semiconductor_equipment_materials: [BESI.AS, KLIC, 0522.HK, ASM.AS, ASML.AS, AMAT, LRCX]
+  # Early-commercial, loss-making oncology and immunotherapy, curated for
+  # ImmunityBio (IBRX) and listed closest first: CG Oncology competes in the same
+  # indication (BCG-unresponsive bladder cancer), UroGen sells bladder-cancer
+  # drugs, then commercial cell and immuno-oncology launches (Iovance, Legend,
+  # Geron, Autolus). yfinance files *every* biotech under this one label, so a
+  # profitable or rare-disease biotech would be compared with the wrong set here:
+  # give it its own group. Profitable mature names (Exelixis, Krystal) are left
+  # out because their margins describe a different stage of life, not a better
+  # version of this one.
+  biotechnology: [CGON, URGN, IOVA, LEGN, GERN, AUTL]
   specialty_industrial_machinery: [SU.PA, SIE.DE, ABBN.SW, ETN, LR.PA, VRT, HUBB]
   electrical_equipment_parts: [SU.PA, SIE.DE, ABBN.SW, ETN, LR.PA, VRT, HUBB]
 

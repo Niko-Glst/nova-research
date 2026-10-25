@@ -19,6 +19,18 @@ praw>=7.7
 # NOTE: pandas-ta is intentionally NOT used. It is unmaintained and breaks on
 # numpy 2.x; ta_analyst.py computes RSI/MACD/SMA directly in pandas instead.
 
+# Optional statistics: scipy speeds up Kendall's tau in correlations/ (about
+# 500x on long samples) and gives the tests an independent reference solver.
+# Everything runs without it: the built-in code takes over and the report says
+# so. On Windows with Smart App Control, a new scipy release can be blocked
+# ("DLL load failed"); 1.18.1 is the version known to load on the owner's PC.
+scipy>=1.11
+
+# Snapshot store (agents/snapshot_store.py): long-format parquet, append-only.
+# Without it, runs are still recorded in data/snapshots/signals.csv; the
+# migration, `history.py backfill` and the store-based backtest need it.
+pyarrow>=14.0
+
 # Dev / quality
 pytest>=7.0
 pre-commit>=3.0

@@ -15,7 +15,10 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass
 
+from agents import breadth_analyst, implied_move
 from agents.charts import (
+    breadth_ratio_chart,
+    implied_move_chart,
     PeerBar,
     equity_curve_chart,
     monte_carlo_histogram,
@@ -23,7 +26,7 @@ from agents.charts import (
     peer_metric_chart,
     probability_ladder_chart,
 )
-from agents.research_report import ResearchReport
+from agents.research_report import WEIGHTS, ResearchReport
 
 # Metric display names, so the page does not show raw snake_case keys.
 _METRIC_LABELS = {
@@ -238,6 +241,8 @@ def _analyst_rows(report: ResearchReport) -> str:
         ("Technical", report.technical.signal if report.technical else None, "technical"),
         ("Insider", report.insider.signal if report.insider else None, "insider"),
         ("Sentiment", report.sentiment.signal if report.sentiment else None, "sentiment"),
+        ("Flows", report.flows.signal if report.flows else None, "flows"),
+        ("Breadth", report.breadth.signal if report.breadth else None, "breadth"),
     ]
 
     rows = []
@@ -285,7 +290,16 @@ def _thesis_section(report: ResearchReport) -> str:
       <h3>What must be true</h3>
       <ul class="conditions">{"".join(items)}</ul>
       {breaks_block}
+      {_evidence_list(thesis.evidence)}
     </section>"""
+
+
+def _evidence_list(lines: list[str]) -> str:
+    if not lines:
+        return ""
+    items = "".join(f"<li>{_esc(line)}</li>" for line in lines)
+    return (f'<h3>Flow evidence <span class="pill muted">inputs, not verdicts</span></h3>'
+            f'<ul class="reasons">{items}</ul>')
 
 
 def _swot_section(report: ResearchReport) -> str:
@@ -317,6 +331,7 @@ def _swot_section(report: ResearchReport) -> str:
         {quadrant("Opportunities", swot.opportunities, "good")}
         {quadrant("Threats", swot.threats, "bad")}
       </div>
+      {_evidence_list(swot.evidence)}
     </section>"""
 
 
@@ -438,6 +453,159 @@ def _technical_section(report: ResearchReport) -> str:
       <h2>Technicals <span class="pill {tone}">{_esc(technical.signal.upper())}</span></h2>
       <div class="stats">{cells}</div>
       <ul class="reasons">{reasons}</ul>
+    </section>"""
+
+
+def _flows_section(report: ResearchReport) -> str:
+    flows = report.flows
+    if flows is None:
+        return ""
+    tone = _tone(_SIGNAL_TONE, flows.signal)
+    parts = "".join(
+        f"<tr><td>{_esc(c.label)}</td><td class=\"num\">"
+        f"{'n/a' if c.score is None else f'{c.score:+.2f}'}"
+        f"{f' <span class=muted-text>({_esc(c.flag)})</span>' if c.flag else ''}</td>"
+        f"<td>{_esc(c.reason)}</td></tr>"
+        for c in flows.components
+    )
+    quarters = ""
+    if flows.quarters:
+        rows = "".join(
+            f"<tr><td>{_esc(q.quarter_end)}</td><td class=\"num\">${q.repurchased / 1e6:,.0f}M</td>"
+            f"<td class=\"num\">${q.issued / 1e6:,.0f}M</td><td class=\"num\">"
+            f"{'' if q.price_return is None else f'{q.price_return:+.1%}'}</td></tr>"
+            for q in flows.quarters
+        )
+        quarters = (
+            "<h3>Buybacks by quarter (shown, not scored)</h3><table><thead><tr>"
+            "<th>Quarter</th><th class=\"num\">Bought back</th><th class=\"num\">Issued</th>"
+            f"<th class=\"num\">Stock that quarter</th></tr></thead><tbody>{rows}</tbody></table>"
+        )
+    options = flows.options
+    if options is not None:
+        def strikes(items) -> str:
+            return ", ".join(f"{k:g} ({v:,})" for k, v in items) or "none"
+
+        iv = (f"<li>At-the-money implied volatility {options.atm_implied_vol:.0%} "
+              f"({_esc(options.atm_expiration)}) against {options.realised_vol:.0%} realised "
+              f"over the last month.</li>" if options.atm_implied_vol == options.atm_implied_vol
+              else "")
+        options_html = (
+            f"<h3>Options to {_esc(options.expirations[-1])} (shown, not scored)</h3>"
+            f"<ul class=\"reasons\"><li>Put/call open interest {options.put_call_ratio:.2f} "
+            f"({options.put_open_interest:,} puts, {options.call_open_interest:,} calls).</li>"
+            f"<li>Busiest call strikes: {_esc(strikes(options.top_call_strikes))}.</li>"
+            f"<li>Busiest put strikes: {_esc(strikes(options.top_put_strikes))}.</li>{iv}</ul>"
+        )
+    else:
+        options_html = (f"<p class=\"muted-text\">Options: {_esc(flows.options_note)}</p>"
+                        if flows.options_note else "")
+    ownership = ", ".join(
+        part for part in (
+            f"institutions {flows.institutions_pct:.0%}" if flows.institutions_pct is not None
+            else "",
+            f"insiders {flows.insiders_pct:.0%}" if flows.insiders_pct is not None else "",
+        ) if part
+    )
+    return f"""
+    <section class="card">
+      <h2>Market flows <span class="pill {tone}">{_esc(flows.signal.upper())}</span></h2>
+      <p class="muted-text">Who is likely to be buying or selling: corporate buybacks and the
+      conditions under which trend-following and volatility-targeting funds add or cut
+      exposure. These are proxies for conditions, not observed positions; thresholds were set
+      by judgement, not fitted.</p>
+      <table><thead><tr><th>Part</th><th class="num">Score</th><th>Reading</th></tr></thead>
+      <tbody>{parts}</tbody></table>
+      {quarters}
+      {options_html}
+      {f'<p class="muted-text">Ownership (shown, not scored): {_esc(ownership)}.</p>'
+       if ownership else ''}
+    </section>"""
+
+
+def _breadth_section(report: ResearchReport) -> str:
+    breadth = report.breadth
+    if breadth is None:
+        return ""
+    tone = _tone(_SIGNAL_TONE, breadth.signal)
+    reasons = "".join(f"<li>{_esc(r)}</li>" for r in breadth.reasons)
+    regime = breadth.regime
+    stats = ""
+    if regime is not None:
+        stats = "".join(
+            f'<div class="stat"><span class="stat-label">{_esc(label)}</span>'
+            f'<span class="stat-value">{_esc(value)}</span></div>'
+            for label, value in (
+                ("RSP/SPY", f"{regime.ratio:.4f}"),
+                ("Position in 1-year range", f"{regime.position:.0%}"),
+                ("Regime", f"{regime.regime:+.0f} ({regime.state.replace('_', ' ')})"),
+                (breadth_analyst.TREND_LABEL, f"{regime.trend_change:+.1%}"),
+                ("Stock group", breadth.group),
+            ))
+    chart = ""
+    if regime is not None and len(breadth.history) > breadth_analyst.TREND_DAYS:
+        _, fitted = breadth_analyst.trend_line(breadth.history)
+        trend = dict(zip(breadth.history.index[-len(fitted):], fitted))
+        chart = breadth_ratio_chart(breadth.history, regime.low, regime.high,
+                                    breadth_analyst.ZONE, breadth_analyst.TURN_MA, trend,
+                                    breadth_analyst.CHART_VIEWS, breadth_analyst.TREND_LABEL)
+    return f"""
+    <section class="card">
+      <h2>Market breadth <span class="pill {tone}">{_esc(breadth.signal.upper())}</span></h2>
+      <p class="muted-text">Equal-weight over cap-weight S&amp;P 500: rising means the average
+      stock outruns the mega caps (broadening), falling means narrowing. A reading of
+      conditions, weight {WEIGHTS["breadth"]:g} (its backtest found no significant edge);
+      in a zone without a turn it makes no call and is left out.</p>
+      <div class="stats">{stats}</div>
+      {chart}
+      <ul class="reasons">{reasons}</ul>
+    </section>"""
+
+
+def _market_move_section(report: ResearchReport) -> str:
+    mm = report.market_move
+    if mm is None:
+        return ""
+    if mm.tier == implied_move.BEYOND:
+        tone = "bad" if mm.assumptions_changed else "good"
+    else:
+        tone = {implied_move.NOTABLE: "warn"}.get(mm.tier, "muted")
+    label = ("assumptions may have changed" if mm.assumptions_changed
+             else f"{mm.tier} {'(so far today)' if mm.partial else ''}".strip())
+    cells = [
+        (f"S&P 500 {'so far ' if mm.partial else ''}{mm.session:%d %b}", f"{mm.move:+.2%}"),
+        (f"Implied (VIX {mm.vol_prev:.2f} / {implied_move.DIVISOR:.2f})",
+         f"±{mm.implied:.2%}"),
+        ("Move / implied", f"{abs(mm.multiple):.2f}x"),
+    ]
+    if mm.next_day_implied is not None:
+        cells.append((f"Next-day implied (VIX1D {mm.next_day_vol_prev:.2f})",
+                      f"±{mm.next_day_implied:.2%}"))
+    cells.append((f"Drops beyond {implied_move.NOTABLE_MAX:g}x, last {len(mm.recent)} sessions",
+                  str(len(mm.recent_beyond_drops))))
+    stats = "".join(f'<div class="stat"><span class="stat-label">{_esc(k)}</span>'
+                    f'<span class="stat-value">{_esc(v)}</span></div>' for k, v in cells)
+    notes = [mm.describe(), mm.recent_text()]
+    if mm.base_text():
+        notes.append(mm.base_text())
+    if mm.next_day_implied is not None:
+        notes.append(f"VIX1D, CBOE's 1-day VIX, priced ±{mm.next_day_implied:.2%} for this "
+                     f"session ({abs(mm.next_day_multiple):.2f}x). Its history starts in 2023, "
+                     f"too short to set the tiers, so it is shown alongside.")
+    chart = implied_move_chart(mm.recent, implied_move.NOISE_MAX, implied_move.NOTABLE_MAX,
+                               mm.partial)
+    return f"""
+    <section class="card">
+      <h2>Market move vs implied (VIX/16)
+        <span class="pill {tone}">{_esc(label.upper())}</span></h2>
+      <p class="muted-text">VIX is the S&amp;P 500's implied volatility per year; divided by
+      {implied_move.DIVISOR:.2f} (&radic;{implied_move.TRADING_DAYS}, the "rule of 16") it is the
+      one-day move the options market priced at the previous close. Within
+      {implied_move.NOISE_MAX:g}x is noise; a drop beyond {implied_move.NOTABLE_MAX:g}x says the
+      market's assumptions may have changed. Shown, not scored.</p>
+      <div class="stats">{stats}</div>
+      {chart}
+      <ul class="reasons">{"".join(f"<li>{_esc(n)}</li>" for n in notes)}</ul>
     </section>"""
 
 
@@ -919,6 +1087,45 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
 .curve-label { font-size: 11px; font-weight: 600; }
 .curve-label.strategy { fill: #1f4fd8; }
 .curve-label.buyhold { fill: #6b7280; }
+/* Market breadth chart: zoom tabs are radio inputs, so no script is needed. */
+.bz { margin: 10px 0 4px; }
+.bz-radio { position: absolute; opacity: 0; pointer-events: none; }
+.bz-tab { display: inline-block; padding: 3px 12px; margin-right: 6px; border-radius: 999px;
+  border: 1px solid var(--line); font-size: 12px; cursor: pointer; color: var(--muted); }
+.bz-radio:checked + .bz-tab { background: var(--ink); color: var(--card); border-color: var(--ink); }
+.bz-radio:focus-visible + .bz-tab { outline: 2px solid #2a78d6; outline-offset: 2px; }
+.bz-view { display: none; }
+.bz-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted);
+  margin: 8px 0 2px; }
+.bz-key { display: inline-block; width: 18px; height: 0; vertical-align: middle; margin-right: 6px;
+  border-top: 2px solid; }
+.bz-key-ratio { border-color: #2a78d6; }
+.bz-key-ma { border-color: #6b7280; border-top-style: dashed; }
+.bz-key-trend { border-color: #eb6834; }
+.bz-key-zone { height: 10px; border: 0; background: #eceef1; }
+.bz-ratio { fill: none; stroke: #2a78d6; stroke-width: 2; stroke-linejoin: round; }
+.bz-ma { fill: none; stroke: #6b7280; stroke-width: 1.5; stroke-dasharray: 4 3; }
+.bz-trend { fill: none; stroke: #eb6834; stroke-width: 2; }
+.bz-zone { fill: #eceef1; }
+.bz-range { stroke: #c6cad0; stroke-width: 1; stroke-dasharray: 2 3; }
+.bz-grid { stroke: #f0f1f3; stroke-width: 1; }
+.bz-dot { fill: #2a78d6; stroke: var(--card); stroke-width: 2; }
+.bz-end { fill: var(--ink); }
+.bz-hover { fill: transparent; }
+.bz-hover:hover { fill: #1a1d21; fill-opacity: 0.06; }
+/* Market move vs implied (VIX/16): bars against each session's implied bands. */
+.im-chart { width: 100%; height: auto; margin: 4px 0; }
+.im-band1 { fill: #e4ebf4; }
+.im-band2 { fill: #eceef2; }
+.im-bar.noise { fill: #8a8f98; }
+.im-bar.notable { fill: #d09000; }
+.im-bar.beyond.down { fill: var(--bad); }
+.im-bar.beyond.up { fill: var(--good); }
+.im-bar.partial { fill-opacity: 0.55; }
+.im-key-band1 { height: 10px; border: 0; background: #e4ebf4; }
+.im-key-band2 { height: 10px; border: 0; background: #eceef2; }
+.im-key-notable { height: 10px; border: 0; background: #d09000; width: 10px; }
+.im-key-beyond { height: 10px; border: 0; background: var(--bad); width: 10px; }
 @media (max-width: 620px) { .chart-grid { grid-template-columns: 1fr; } }
 .ladder-chart, .fan-chart { width: 100%; height: auto; margin: 10px 0 4px; }
 .gridline { stroke: var(--line); stroke-width: 1; }
@@ -974,6 +1181,7 @@ def render_report(report: ResearchReport, generated_at: str = "") -> str:
     <span class="verdict">{_esc(report.verdict.upper())}</span>
     <span class="pill {tone}">score {report.score:+.2f}</span>
     <span class="pill muted">confidence {report.confidence:.0%}</span>
+    <span class="pill muted model-version">model {_esc(report.model_version or 'unversioned')}</span>
   </div>
   {_score_gauge_svg(report.score)}
   <table>
@@ -991,6 +1199,9 @@ def render_report(report: ResearchReport, generated_at: str = "") -> str:
 {_fundamentals_section(report)}
 {_technical_section(report)}
 {_insider_section(report)}
+{_flows_section(report)}
+{_breadth_section(report)}
+{_market_move_section(report)}
 {_sentiment_section(report)}
 {errors_block}
 

@@ -1,0 +1,20 @@
+# Universes for the signal-weight backtest (optimize.py).
+#
+# Weights are fitted on all stocks at once and shared between them: weights
+# that only work for one stock are almost always fitted noise.
+#
+# Survivorship bias: these are large companies *today*. Choosing them with
+# hindsight flatters buy & hold (they are the winners that stayed big) and,
+# to a lesser degree, any long strategy on them. Read every result with that
+# in mind; a fair test would use the index members as of each date.
+
+universes:
+  us_large_caps:
+    description: >-
+      Twenty US large caps from different sectors, all reporting earnings
+      since before 2004, so the earnings-surprise signal covers the sample.
+    symbols: [AAPL, MSFT, NVDA, AMZN, INTC, CSCO, IBM,
+              JPM, JNJ, UNH, MRK,
+              XOM, CVX, CAT,
+              PG, KO, PEP, WMT, HD, DIS]
+    start: "2004-01-01"

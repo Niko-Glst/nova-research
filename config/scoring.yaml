@@ -1,0 +1,203 @@
+# Scoring model for the research pipeline: versions, leg weights and the
+# market-flow rules. Every threshold, weight and URL the flow model uses lives
+# here (owner's rule, 2026-10-22): the code reads these and holds no magic
+# numbers. Thresholds marked "judgement" were chosen by argument with the
+# owner, not fitted.
+
+# Semantic version of the scoring model, written into every run and snapshot
+# row. Major: a change that can move existing scores; minor: additive.
+#   1.0.0  four analysts (until 2026-10-21)
+#   1.1.0  flows leg added (discrete volatility part, buyback-yield part)
+#   2.0.0  Yang-Zhang continuous volatility score, share-count net issuance,
+#          weighted flow components, market-breadth leg (RSP/SPY)
+#   3.0.0  owner 2026-10-25, after the breadth backtest: breadth weight 0.8 -> 0.5;
+#          a breadth regime of 0 (in a zone, no turn yet) is no call and leaves
+#          the leg out instead of counting as neutral; the flows leg takes no
+#          stance from the market part alone. 2.0.0 runs can be rescored.
+model_version: "3.0.0"
+
+# Layout of the snapshot store. 1 = the wide CSV (data/snapshots/signals.csv);
+# 2 = long format, parquet parts under data/snapshots/long/.
+schema_version: 2
+
+# How much each analyst counts toward the combined score (moved here from
+# agents/research_report.py on 2026-10-22, values unchanged). The combined
+# score is sum(value x weight) / sum(weight of the legs that reported): always
+# in [-1, 1], and a leg that could not be computed is reweighted away, never
+# counted as neutral.
+legs:
+  fundamental: 1.0
+  technical: 0.8
+  insider: 0.6
+  sentiment: 0.4
+  flows: 0.4
+  # Owner 2026-10-25: first 0.8; lowered to 0.5 the same day after the breadth
+  # backtest (2004-2026) found no significant edge (history.py breadth-backtest).
+  breadth: 0.5
+
+# Market breadth (agents/breadth_analyst.py): equal-weight over cap-weight S&P 500.
+# Rising: smaller stocks outrun the largest (broadening); falling: narrowing.
+# The ratio moves in long waves driven by collective rebalancing flows.
+breadth:
+  equal_weight: RSP
+  cap_weight: SPY
+  price_period: 2y                 # covers the 1-year range plus the chart's warm-up
+  range_days: 252                  # owner: the range is the last year
+  zone: 0.20                       # bottom / top 20% of that range
+  turn_ma_days: 50                 # a zone call needs the ratio back through this average
+  # Between the zones the local trend decides (owner 2026-10-25: a few months,
+  # visible through the zigzags): the slope of a least-squares trend line
+  # through ln(ratio) over this many trading days (~3 months).
+  trend_days: 63
+  chart_views:                     # research report chart, label: trading days
+    1Y: 252
+    3M: 63
+    1M: 21
+  # Regime: +1 favours breadth, -1 favours the leaders.
+  zone_turn_score: 1.0             # bottom zone + turn up (narrowing exhausted), or top + turn down
+  # In a zone, no turn yet: be ready, no call. A regime of 0 gives no breadth
+  # score, so the leg is left out of the verdict (owner 2026-10-25), not neutral.
+  zone_waiting_score: 0.0
+  trend_score: 1.0                 # between the zones: trend line rising (+) / falling (-)
+  leader_sectors: [Technology, Communication Services, Consumer Cyclical]
+  leader_min_market_cap: 500000000000    # $500B: mega caps only
+  breadth_sectors: [Healthcare, Financial Services, Consumer Defensive, Utilities,
+                    Industrials, Real Estate]
+  # Backtest (history.py breadth-backtest): does the regime precede the ratio?
+  backtest_start: "2004-06-01"     # RSP starts 2003-04; one year of range first
+  backtest_horizons_months: [1, 3, 6]
+  backtest_sector_breadth: [XLV, XLF, XLP, XLU, XLI]    # sector SPDRs since 1998
+  backtest_sector_leaders: [XLK]
+  output_csv: reports/breadth_backtest.csv
+  output_html: reports/breadth_backtest.html
+
+# Market move against the move VIX implied (owner 2026-10-25). VIX is the S&P
+# 500's 30-day implied volatility per year; divided by sqrt(252) = 15.87 (the
+# "rule of 16") it is the implied one-day move. Shown, not scored: it reads
+# whether a move is noise. The tiers are judgement, checked against 1990-2026
+# data (history.py implied-move-study): drops within 1x looked like any other
+# day afterwards; drops beyond 2x were followed by more big days and by realised
+# volatility catching up with VIX.
+implied_move:
+  index: "^GSPC"
+  vol_index: "^VIX"
+  next_day_vol_index: "^VIX1D"     # CBOE 1-day VIX, since 2023-04: shown alongside
+  trading_days: 252                # implied daily move = VIX / sqrt(this)
+  price_period: 3mo                # live fetch for the report panel
+  recent_sessions: 20              # sessions shown in the panel
+  noise_max: 1.0                   # |move| up to this many implied moves: noise
+  notable_max: 2.0                 # a drop beyond this: assumptions may have changed
+  study_start: "1990-01-02"        # VIX history starts here
+  follow_sessions: 5               # "another drop beyond 2x within the next week"
+  forward_sessions: 21             # what followed over the next month
+  study_vix_levels: [15, 20, 30]   # VIX buckets in the study
+  study_multiples: [1.0, 1.5, 2.0, 3.0]   # rows of the study's frequency table
+  output_csv: reports/implied_move_study.csv
+  output_html: reports/implied_move_study.html
+
+flows:
+  # Weighted mean of the parts that could be scored, each in [-1, 1]; the
+  # stance is bullish at or above this, bearish at or below minus it.
+  stance_threshold: 0.5
+  component_weights:               # judgement: equal until the backtest says otherwise
+    issuance: 1.0
+    systematic_market: 1.0
+    systematic_stock: 1.0
+  default_component_weight: 1.0    # for a part not listed above
+
+  market:
+    proxy: SPY                      # S&P 500: what trend and vol-target funds mostly trade
+    price_period: 2y                # covers a 12-month trend and a one-year volatility
+    trend_horizons: [21, 63, 252]   # ~1, 3, 12 months (Hurst, Ooi & Pedersen 2017)
+    trend_min_votes: 2              # horizons that must agree
+    vol_short: 21
+    vol_long: 252
+    calm_ratio: 1.0                 # judgement: volatility at or below its norm
+    rising_ratio: 1.25              # judgement: a quarter above its norm
+
+  stock_volatility:
+    # "continuous": score = -clip(ln(short/long) / SE, -1, 1).
+    # "discrete": the 1.1.0 rule (+1 at or below settling_ratio, -1 at or above
+    # rising_ratio), kept for comparison.
+    scoring: continuous
+    short_window: 21
+    long_window: 252                # close-to-close
+    settling_ratio: 0.8             # judgement; log-symmetric with 1.25
+    rising_ratio: 1.25
+    yang_zhang_alpha: 1.34          # Yang & Zhang (2000): k = (alpha-1) / (alpha + (n+1)/(n-1))
+    # Variance of ln(vol) for close-to-close over Yang-Zhang on the same days,
+    # i.e. how many times larger a close-to-close sample would have to be.
+    # Calibrated by tests/test_volatility_simulation.py (Gaussian, 78 steps,
+    # 20% overnight variance): 6.7. The same simulation shows Yang-Zhang reads
+    # about 7% low when High/Low come from 78 points instead of every trade.
+    yz_efficiency: 6.7
+    quality:
+      # A short-window row is suspect when High == Low, Open is missing, or
+      # Open == previous Close. Above this share, fall back to close-to-close.
+      max_bad_row_share: 0.20
+
+  issuance:
+    # Net issuance (Fama-French): ln(split-adjusted shares at fiscal year-end
+    # t-1) - ln(shares at t-2). Primary measure; cash-flow lines confirm it.
+    full_scale: 0.02                # |net issuance| at which a side saturates (judgement, 2% as in 1.1.0)
+    side_weights:                   # owner 2026-10-22: the anomaly is driven by issues, not repurchases
+      issuance: 1.0                 # shares grew: score down to -1.0
+      buyback: 0.5                  # shares shrank: score up to +0.5
+    # Buyback line absent but shares fell by more than this: data_conflict.
+    conflict_tolerance: 0.005
+    # A raw share-count jump within this factor of a split ratio between the two
+    # year-ends means the counts were NOT split-adjusted (yfinance's are: NVDA
+    # FY2024 reads 24,640M after the 2024 10-for-1 split).
+    split_match_tolerance: 0.25
+    quarters_shown: 6               # quarterly buyback table (shown, not scored)
+    quarter_price_gap_days: 7       # a quarter's start price must lie within this many days
+
+  sec:
+    enabled: true                   # optional cross-check for US filers
+    tickers_url: https://www.sec.gov/files/company_tickers.json
+    companyfacts_url: https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json
+    user_agent_env: SEC_USER_AGENT
+    timeout_seconds: 30
+    cache_dir: data/cache/sec
+    cache_max_age_hours:
+      tickers: 168                  # the ticker -> CIK map changes rarely
+      companyfacts: 24
+    annual_forms: [10-K]
+    shares_tags: [CommonStockSharesOutstanding]
+    repurchase_tags: [PaymentsForRepurchaseOfCommonStock]
+    issuance_tags: [ProceedsFromIssuanceOfCommonStock]
+    # Never read as a buyback: shares withheld to pay employees' taxes on
+    # stock compensation are not open-market repurchases.
+    excluded_tags: [PaymentsRelatedToTaxWithholdingForShareBasedCompensation]
+    # A duration fact counts as a fiscal year when it spans this many days.
+    annual_duration_days: [350, 380]
+    # The prior year-end in the same filing lies this many days before (+/-).
+    prior_year_end_tolerance_days: 40
+
+  evidence:                         # agents/flow_evidence.py rank wording
+    top_decile: 0.9                 # share of the universe at or below this stock
+    bottom_decile: 0.1
+
+  options:                          # shown, not scored
+    horizon_days: 45                # expirations read: those within this many days ...
+    max_expirations: 6              # ... at most this many (one request each)
+    min_iv_days: 7                  # ATM implied vol from the first expiry at least this far out
+    iv_plausible: [0.01, 5.0]       # implied vols outside this range are data errors
+
+history:
+  # history.py rescore: an archived report is matched to its snapshot row when
+  # their timestamps (local vs UTC, compared in local time) are this close.
+  rescore_match_minutes: 3
+  # Long-format parquet snapshot store (schema 2), append-only part files.
+  store_dir: data/snapshots/long
+
+  # Point-in-time backfill and the flow backtest (history.py backfill / backtest).
+  universe: us_large_caps            # from config/strategy.yaml (owner, 2026-10-22)
+  benchmark: SPY                     # forward returns are in excess of this
+  start: "2010-01-01"                # first month-end scored: SEC XBRL starts ~2009-2011
+  horizons_months: [1, 3, 6]
+  quantiles: 5                       # with 20 stocks, 4 per bucket
+  min_tickers_per_date: 10           # fewer scored stocks on a date: no IC that date
+  max_filing_age_days: 450           # a 10-K older than ~15 months is stale, not current
+  output_csv: reports/flows_backtest.csv
+  output_html: reports/flows_backtest.html

@@ -97,7 +97,8 @@ def compute_correlation(
         return float("nan")
 
     aggregate = portfolio_returns.mean(axis=1)
-    aligned = pd.concat([candidate_returns, aggregate], axis=1, join="inner").dropna()
+    aligned = pd.concat([candidate_returns, aggregate], axis=1, join="inner",
+                        sort=True).dropna()
 
     if len(aligned) < 3:
         return float("nan")

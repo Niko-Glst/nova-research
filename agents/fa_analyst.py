@@ -88,6 +88,7 @@ class FundamentalRead:
     reasons: list[str] = field(default_factory=list)
     peer_comparison: PeerComparison | None = None
     name: str = ""  # company name, e.g. for searching sources that don't use tickers
+    sector: str = ""  # yfinance sector label (breadth_analyst groups stocks by it)
 
 
 def _normalize_key(text: str) -> str:
@@ -97,6 +98,79 @@ def _normalize_key(text: str) -> str:
     """
     collapsed = re.sub(r"[^a-z0-9]+", "_", (text or "").lower())
     return re.sub(r"_+", "_", collapsed).strip("_")
+
+
+_MARGINS = ("profit_margin", "gross_margin", "operating_margin")
+
+
+def _repair_margins(out: dict, info: dict) -> list[str]:
+    """Drop or recompute margins that yfinance reports as a placeholder 0.0.
+
+    yfinance returns exactly 0.0 when it cannot compute a margin. ImmunityBio
+    (IBRX) on 2026-10-17: profitMargins 0.0 against a net loss of $992M on
+    $166M of revenue, a real margin near -600%. Read at face value, a deep loss
+    passes as break-even, escapes the negative-margin penalty and beats
+    loss-making peers on profitability. So:
+
+    - no revenue (missing or zero): every margin is undefined and is dropped;
+    - profit margin exactly 0.0: recomputed as net income / revenue when net
+      income is known and non-zero, otherwise dropped;
+    - gross or operating margin exactly 0.0: dropped. info carries no
+      operating income to check it against, and an exact 0.0 is far likelier
+      a placeholder than a real result.
+    """
+    notes: list[str] = []
+    revenue = info.get("totalRevenue")
+    if not revenue:
+        dropped = [m for m in _MARGINS if out.pop(m, None) is not None]
+        if dropped:
+            notes.append(f"No revenue reported, so margins are undefined: dropped "
+                         f"{', '.join(dropped)}.")
+        return notes
+    if out.get("profit_margin") == 0.0:
+        net_income = info.get("netIncomeToCommon")
+        if net_income:
+            out["profit_margin"] = float(net_income) / float(revenue)
+            notes.append(f"yfinance gave a net margin of 0.0; recomputed from net income "
+                         f"{float(net_income) / 1e6:,.0f}M on revenue {float(revenue) / 1e6:,.0f}M "
+                         f"as {out['profit_margin'] * 100:.1f}%.")
+        else:
+            del out["profit_margin"]
+            notes.append("yfinance gave a net margin of 0.0 with no net income to check it; "
+                         "treated as missing.")
+    for name in ("gross_margin", "operating_margin"):
+        if out.get(name) == 0.0:
+            del out[name]
+            notes.append(f"yfinance gave a {name.replace('_', ' ')} of exactly 0.0; treated as "
+                         f"missing.")
+    return notes
+
+
+def extract_fundamentals(info: dict, symbol: str) -> dict[str, float]:
+    """The fields this module reads from a yfinance info dict, as floats.
+
+    Fields yfinance did not provide are omitted rather than defaulted, and
+    placeholder margins are repaired (see _repair_margins).
+    """
+    out: dict[str, float] = {}
+    for raw_key, name in _RAW_FIELDS.items():
+        value = info.get(raw_key)
+        if value is None:
+            continue
+        try:
+            out[name] = float(value)
+        except (TypeError, ValueError):
+            continue
+
+    data_notes = _repair_margins(out, info)
+
+    # Sector/industry are strings, kept under private keys so they travel with
+    # the metrics dict without polluting the numeric output.
+    out["_sector"] = info.get("sector") or ""
+    out["_industry"] = info.get("industry") or ""
+    out["_name"] = info.get("shortName") or symbol.strip().upper()
+    out["_data_notes"] = " ".join(data_notes)
+    return out
 
 
 def fetch_fundamentals(symbol: str) -> dict[str, float]:
@@ -116,23 +190,7 @@ def fetch_fundamentals(symbol: str) -> dict[str, float]:
         raise ValueError(
             f"No fundamental data returned for {symbol!r}. Check the ticker spelling."
         )
-
-    out: dict[str, float] = {}
-    for raw_key, name in _RAW_FIELDS.items():
-        value = info.get(raw_key)
-        if value is None:
-            continue
-        try:
-            out[name] = float(value)
-        except (TypeError, ValueError):
-            continue
-
-    # Sector/industry are strings, kept under private keys so they travel with
-    # the metrics dict without polluting the numeric output.
-    out["_sector"] = info.get("sector") or ""
-    out["_industry"] = info.get("industry") or ""
-    out["_name"] = info.get("shortName") or symbol.strip().upper()
-    return out
+    return extract_fundamentals(info, symbol)
 
 
 def compute_ratios(fundamentals: dict[str, float]) -> dict[str, float]:
@@ -232,6 +290,9 @@ def compare_to_peers(symbol: str, metrics: dict[str, float]) -> PeerComparison:
                 f"No peer group is declared for industry {industry!r} / sector "
                 f"{sector!r}. Add one under `peer_groups` in "
                 f"config/allowed_sources.yaml to enable niche comparison."
+                if industry or sector else
+                "No industry or sector is listed for this symbol (an ETF or fund?), "
+                "so there are no peers to compare with."
             ),
         )
 
@@ -405,6 +466,8 @@ def analyze(symbol: str, include_peers: bool = True) -> FundamentalRead:
 
     peer_comparison = compare_to_peers(symbol, metrics) if include_peers else None
     signal, reasons = _classify(metrics, peer_comparison)
+    if raw.get("_data_notes"):
+        reasons.append(f"Data repaired: {raw['_data_notes']}")
 
     industry = raw.get("_industry") or "unknown industry"
     sector = raw.get("_sector") or "unknown sector"
@@ -423,4 +486,5 @@ def analyze(symbol: str, include_peers: bool = True) -> FundamentalRead:
         reasons=reasons,
         peer_comparison=peer_comparison,
         name=str(raw.get("_name") or ""),
+        sector=str(raw.get("_sector") or ""),
     )

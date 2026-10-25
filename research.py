@@ -17,7 +17,8 @@ import webbrowser
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
-from agents import report_archive, research_report
+from agents import report_archive, research_report, signal_snapshots
+from config.settings import ROOT_DIR
 
 
 def _to_jsonable(value):
@@ -65,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--html",
         nargs="?",
-        const="reports",
+        const=str(ROOT_DIR / "reports"),
         metavar="DIR",
         help="Write a full HTML report (charts, SWOT, thesis) into DIR "
         "(default: reports/) and open it in the browser.",
@@ -111,6 +112,11 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         reports.append(report)
+        try:  # build the point-in-time signal history; never fail the run over it
+            signal_snapshots.record(report)
+        except Exception as exc:
+            print(f"{symbol}: signal snapshot not saved -- {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
         if not args.json:
             print(research_report.format_report(report))
             print()
@@ -129,4 +135,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from common.console import safe_console
+
+    safe_console()
     raise SystemExit(main())

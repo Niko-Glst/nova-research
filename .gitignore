@@ -36,6 +36,10 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+# Price cache written by correlations/data.py; regenerated on demand.
+data/cache/
+# Point-in-time signal history written by agents/signal_snapshots.py.
+data/snapshots/
 
 # --- Logs ---
 *.log
@@ -64,3 +68,4 @@ htmlcov/
 
 # --- Generated HTML reports ---
 reports/
+correlation_reports/

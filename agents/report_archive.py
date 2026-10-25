@@ -17,13 +17,23 @@ from __future__ import annotations
 
 import html
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
-from agents import html_report
+from agents import html_report, signal_snapshots
+from agents.research_report import MODEL_VERSION as CURRENT_MODEL
+from common.files import atomic_write_text
+from config.settings import load_scoring_config
 
 ARCHIVE_DIR = "archive"
+
+# A rescore is matched to its archived report within this many minutes.
+RESCORE_MATCH_MINUTES = int(load_scoring_config()["history"]["rescore_match_minutes"])
+
+# Model versions inferred for reports written before versioning (2026-10-22).
+INFERRED_BASE = "1.0.0"
+INFERRED_FLOWS = "1.1.0"
 INDEX_FILE = "index.html"
 _STAMP_FORMAT = "%Y-%m-%d_%H%M"
 _FILE_PATTERN = re.compile(r"^(?P<symbol>.+)_(?P<stamp>\d{4}-\d{2}-\d{2}_\d{4})\.html$")
@@ -39,6 +49,8 @@ class ArchivedRun:
     verdict: str
     score: float | None
     confidence: int | None
+    model_version: str = ""  # "" when the report predates versioning
+    rescored: float | None = None  # score under the current model, when rescorable
 
 
 def save_report(report, directory: str | Path = "reports", now: datetime | None = None) -> Path:
@@ -53,10 +65,10 @@ def save_report(report, directory: str | Path = "reports", now: datetime | None 
 
     document = html_report.render_report(report, now.strftime("%Y-%m-%d %H:%M"))
     latest = out_dir / f"{report.symbol}.html"
-    latest.write_text(document, encoding="utf-8")
-    (archive_dir / f"{report.symbol}_{now.strftime(_STAMP_FORMAT)}.html").write_text(
-        document, encoding="utf-8"
-    )
+    # Atomic: the index reads verdicts back from these pages.
+    atomic_write_text(latest, document)
+    atomic_write_text(archive_dir / f"{report.symbol}_{now.strftime(_STAMP_FORMAT)}.html",
+                      document)
 
     write_index(out_dir)
     return latest
@@ -72,6 +84,11 @@ def _read_run(path: Path) -> ArchivedRun | None:
     verdict = re.search(r'<span class="verdict">([^<]+)</span>', text)
     score = re.search(r"score ([+-]?\d+\.\d+)", text)
     confidence = re.search(r"confidence (\d+)%", text)
+    version = re.search(r'class="pill muted model-version">model ([^<]+)<', text)
+    if version:
+        model_version = version[1].strip()
+    else:  # before versioning: the flows section arrived with 1.1.0
+        model_version = INFERRED_FLOWS if "Market flows" in text else INFERRED_BASE
     return ArchivedRun(
         symbol=match["symbol"],
         generated=datetime.strptime(match["stamp"], _STAMP_FORMAT),
@@ -79,16 +96,39 @@ def _read_run(path: Path) -> ArchivedRun | None:
         verdict=verdict[1].strip() if verdict else "?",
         score=float(score[1]) if score else None,
         confidence=int(confidence[1]) if confidence else None,
+        model_version=model_version,
     )
+
+
+def _rescored_score(run: ArchivedRun, rescores: list[dict[str, str]]) -> float | None:
+    """The current-model score of a run, matched to its snapshot by symbol and time.
+
+    Archive stamps are local time and snapshots UTC, so both are compared in
+    local time, within RESCORE_MATCH_MINUTES.
+    """
+    for r in rescores:
+        if r.get("symbol") != run.symbol or r.get("model_version") != CURRENT_MODEL:
+            continue
+        try:
+            recorded = datetime.fromisoformat(r["recorded_at"]).astimezone().replace(tzinfo=None)
+            score = float(r["score"])
+        except (KeyError, ValueError):
+            continue
+        if abs((recorded - run.generated).total_seconds()) <= RESCORE_MATCH_MINUTES * 60:
+            return score
+    return None
 
 
 def list_runs(directory: str | Path = "reports") -> dict[str, list[ArchivedRun]]:
     """All archived runs, grouped by symbol, newest run first within each."""
     archive_dir = Path(directory) / ARCHIVE_DIR
     runs: dict[str, list[ArchivedRun]] = {}
+    rescores = signal_snapshots.load_rescores()
     for path in sorted(archive_dir.glob("*.html")) if archive_dir.exists() else []:
         run = _read_run(path)
         if run is not None:
+            if run.model_version != CURRENT_MODEL:
+                run = replace(run, rescored=_rescored_score(run, rescores))
             runs.setdefault(run.symbol, []).append(run)
     for symbol_runs in runs.values():
         symbol_runs.sort(key=lambda r: r.generated, reverse=True)
@@ -106,18 +146,32 @@ def _row(run: ArchivedRun, previous: ArchivedRun | None, root: Path) -> str:
 
     change = "&ndash;"
     change_tone = ""
-    if previous is not None and run.score is not None and previous.score is not None:
+    comparable = previous is not None and previous.model_version == run.model_version
+    if comparable and run.score is not None and previous.score is not None:
         delta = run.score - previous.score
         change = f"{delta:+.2f}"
         change_tone = "good" if delta > 0 else "bad" if delta < 0 else ""
 
-    return (
+    row = (
         f'<tr><td><a href="{href}">{run.generated:%Y-%m-%d %H:%M}</a></td>'
         f'<td><span class="pill {_verdict_tone(run.verdict)}">{html.escape(run.verdict)}</span></td>'
         f'<td class="num">{score}</td>'
         f'<td class="num {change_tone}">{change}</td>'
-        f'<td class="num">{confidence}</td></tr>'
+        f'<td class="num">{confidence}</td>'
+        f'<td class="num">{html.escape(run.model_version)}</td></tr>'
     )
+    if previous is not None and previous.model_version != run.model_version:
+        # A visible break: scores either side are on different models and are not
+        # compared or connected.
+        row += (
+            f'<tr class="version-break"><td colspan="6"><span class="pill warn">version break'
+            f'</span> model {html.escape(previous.model_version)} &rarr; '
+            f'{html.escape(run.model_version)}: scores before and after are not comparable'
+            + (f"; under the current model the earlier run scores {previous.rescored:+.2f}"
+               if previous.rescored is not None else
+               "; the earlier run lacks the inputs to rescore it") + "</td></tr>"
+        )
+    return row
 
 
 def render_index(directory: str | Path = "reports") -> str:
@@ -139,7 +193,8 @@ def render_index(directory: str | Path = "reports") -> str:
       <h2>{html.escape(symbol)} <span class="pill muted">{count} run{"s" if count != 1 else ""}</span></h2>
       <table>
         <thead><tr><th>Generated</th><th>Verdict</th><th class="num">Score</th>
-        <th class="num">Change</th><th class="num">Confidence</th></tr></thead>
+        <th class="num">Change</th><th class="num">Confidence</th>
+        <th class="num">Model</th></tr></thead>
         <tbody>{rows}</tbody>
       </table>
     </section>"""
@@ -159,7 +214,8 @@ def render_index(directory: str | Path = "reports") -> str:
   <div class="brand">NIKOLAY GELSHTEIN</div>
   <h1>Research reports</h1>
   <p class="muted-text">Every saved run, newest first. Click a date to open that report.
-     Change is the score difference from the previous run of the same ticker.</p>
+     Change is the score difference from the previous run of the same ticker, only
+     between runs of the same model version; a version break marks where it changed.</p>
 </header>
 {body}
 <footer>
@@ -171,5 +227,5 @@ def render_index(directory: str | Path = "reports") -> str:
 
 def write_index(directory: str | Path = "reports") -> Path:
     path = Path(directory) / INDEX_FILE
-    path.write_text(render_index(directory), encoding="utf-8")
+    atomic_write_text(path, render_index(directory))
     return path

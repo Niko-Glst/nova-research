@@ -526,3 +526,198 @@ def outcome_fan_chart(
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+# --------------------------------------------------------------------------
+# Market breadth: RSP/SPY with zoomable views
+# --------------------------------------------------------------------------
+
+
+def _ratio_view_svg(window, ma, trend, low: float, high: float, zone: float,
+                    label: str, turn_ma: int) -> str:
+    """One view of the ratio: zone bands, the ratio, its turn average and trend line."""
+    import pandas as pd  # local: the rest of this module works on numpy arrays
+
+    width, height = 640, 250
+    left, right, top, bottom = 52, 104, 14, 28
+    plot_w, plot_h = width - left - right, height - top - bottom
+    values = [window.to_numpy(dtype=float)]
+    for extra in (ma, trend):
+        if len(extra):
+            values.append(extra.to_numpy(dtype=float))
+    data = np.concatenate(values)
+    data = data[np.isfinite(data)]
+    lo, hi = float(data.min()), float(data.max())
+    if label == "1Y":  # the full range and its zones belong in the yearly view
+        lo, hi = min(lo, low), max(hi, high)
+    pad = (hi - lo) * 0.06 or 0.001
+    lo, hi = lo - pad, hi + pad
+    dates = list(window.index)
+    n = len(dates)
+
+    def x(i: float) -> float:
+        return left + (i / max(n - 1, 1)) * plot_w
+
+    def y(v: float) -> float:
+        return top + (hi - v) / (hi - lo) * plot_h
+
+    position = {d: i for i, d in enumerate(dates)}
+
+    def path(series) -> str:
+        pts = [(position[d], v) for d, v in series.items() if d in position and np.isfinite(v)]
+        return " ".join(f"{'M' if k == 0 else 'L'}{x(i):.1f},{y(v):.1f}"
+                        for k, (i, v) in enumerate(pts))
+
+    clip = f"bz-clip-{label}"
+    band = (high - low) * zone
+    parts = [f'<svg viewBox="0 0 {width} {height}" class="bz-chart" role="img" '
+             f'aria-label="Equal-weight over cap-weight S&amp;P 500, last {_esc(label)}">',
+             f'<defs><clipPath id="{clip}"><rect x="{left}" y="{top}" width="{plot_w}" '
+             f'height="{plot_h}"/></clipPath></defs><g clip-path="url(#{clip})">']
+    for z_lo, z_hi, name in ((low, low + band, "bottom zone"), (high - band, high, "top zone")):
+        y1, y2 = y(z_hi), y(z_lo)
+        parts.append(f'<rect x="{left}" y="{y1:.1f}" width="{plot_w}" height="{max(y2 - y1, 0):.1f}" '
+                     f'class="bz-zone"><title>{name} of the 1-year range: {z_lo:.4f} to '
+                     f'{z_hi:.4f}</title></rect>')
+    for level in (low, high):
+        parts.append(f'<line x1="{left}" x2="{left + plot_w}" y1="{y(level):.1f}" '
+                     f'y2="{y(level):.1f}" class="bz-range"/>')
+    parts.append("</g>")
+    for k in range(4):
+        v = lo + pad + k * (hi - lo - 2 * pad) / 3
+        parts.append(f'<line x1="{left}" x2="{left + plot_w}" y1="{y(v):.1f}" y2="{y(v):.1f}" '
+                     f'class="bz-grid"/><text x="{left - 6}" y="{y(v) + 3.5:.1f}" '
+                     f'class="axis-label" text-anchor="end">{v:.3f}</text>')
+    step = {"1Y": 21, "3M": 10, "1M": 5}.get(label, max(n // 6, 1))
+    for i in range(0, n, step):
+        fmt = "%b" if label == "1Y" else "%d %b"
+        parts.append(f'<text x="{x(i):.1f}" y="{height - 8}" class="axis-label" '
+                     f'text-anchor="middle">{pd.Timestamp(dates[i]).strftime(fmt)}</text>')
+    if len(ma):
+        parts.append(f'<path d="{path(ma)}" class="bz-ma"/>')
+    if len(trend):
+        parts.append(f'<path d="{path(trend)}" class="bz-trend"/>')
+    parts.append(f'<path d="{path(window)}" class="bz-ratio"/>')
+    last = float(window.iloc[-1])
+    parts.append(f'<circle cx="{x(n - 1):.1f}" cy="{y(last):.1f}" r="4" class="bz-dot"/>')
+    parts.append(f'<text x="{x(n - 1) + 8:.1f}" y="{y(last) + 4:.1f}" class="curve-label bz-end">'
+                 f'RSP/SPY {last:.4f}</text>')
+    slot = plot_w / max(n, 1)
+    for i, d in enumerate(dates):
+        m = ma.get(d, np.nan) if len(ma) else np.nan
+        tip = f"{pd.Timestamp(d).date()}: RSP/SPY {float(window.iloc[i]):.4f}"
+        if np.isfinite(m):
+            tip += f", {turn_ma}-day {m:.4f}"
+        parts.append(f'<rect x="{x(i) - slot / 2:.1f}" y="{top}" width="{slot:.2f}" '
+                     f'height="{plot_h}" class="bz-hover"><title>{_esc(tip)}</title></rect>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def breadth_ratio_chart(history, low: float, high: float, zone: float, turn_ma: int,
+                        trend, views: dict[str, int], trend_label: str = "Trend line") -> str:
+    """RSP/SPY over the last year, with 3-month and 1-month zoom buttons (no script).
+
+    `history` is the ratio (date index) with at least `turn_ma` extra days for the
+    moving average; `trend` the fitted trend line (date index).
+    """
+    import pandas as pd
+
+    if history is None or len(history) < 2:
+        return ""
+    ma = history.rolling(turn_ma).mean()
+    trend = pd.Series(trend) if trend is not None else pd.Series(dtype=float)
+    labels = list(views)
+    default = labels[0]
+    radios, panels, css = [], [], []
+    for label in labels:
+        days = views[label]
+        window = history.iloc[-days:]
+        svg = _ratio_view_svg(window, ma.loc[window.index].dropna(),
+                              trend[trend.index.isin(window.index)], low, high, zone, label,
+                              turn_ma)
+        ident = f"bz-{label}"
+        radios.append(f'<input type="radio" name="bz-view" id="{ident}" class="bz-radio"'
+                      f'{" checked" if label == default else ""}>'
+                      f'<label for="{ident}" class="bz-tab">{_esc(label)}</label>')
+        panels.append(f'<div class="bz-view bz-v-{label}">{svg}</div>')
+        css.append(f"#{ident}:checked ~ .bz-views .bz-v-{label} {{ display: block; }}")
+    legend = ('<div class="bz-legend"><span><i class="bz-key bz-key-ratio"></i>RSP/SPY</span>'
+              f'<span><i class="bz-key bz-key-ma"></i>{turn_ma}-day average</span>'
+              f'<span><i class="bz-key bz-key-trend"></i>{_esc(trend_label)}</span>'
+              f'<span><i class="bz-key bz-key-zone"></i>Top / bottom {zone:.0%} of the 1-year '
+              'range</span></div>')
+    return (f'<style>{" ".join(css)}</style><div class="bz">{"".join(radios)}{legend}'
+            f'<div class="bz-views">{"".join(panels)}</div></div>')
+
+
+# --------------------------------------------------------------------------
+# Market move against the implied move (VIX/16)
+# --------------------------------------------------------------------------
+
+
+def implied_move_chart(recent, noise_max: float, notable_max: float,
+                       partial_last: bool = False) -> str:
+    """One bar per session (its move) against that session's +-1x and +-2x implied bands.
+
+    `recent` has a date index and the columns move, implied, vol_prev, multiple, tier.
+    """
+    import pandas as pd
+
+    if recent is None or len(recent) == 0:
+        return ""
+    width, height = 640, 230
+    left, right, top, bottom = 52, 14, 12, 28
+    plot_w, plot_h = width - left - right, height - top - bottom
+    moves = recent["move"].to_numpy(dtype=float) * 100.0
+    implied = recent["implied"].to_numpy(dtype=float) * 100.0
+    reach = float(np.nanmax(np.concatenate([np.abs(moves), implied * notable_max])))
+    bound = max(math.ceil(reach * 1.08 * 2) / 2, 0.5)  # half-percent steps
+    n = len(recent)
+    slot = plot_w / n
+    bar_w = max(slot * 0.56, 2.0)
+
+    def y(v: float) -> float:
+        return top + (bound - v) / (2 * bound) * plot_h
+
+    parts = [f'<svg viewBox="0 0 {width} {height}" class="im-chart" role="img" '
+             f'aria-label="S&amp;P 500 daily moves against the move VIX implied, last {n} '
+             f'sessions">']
+    for k in (-bound, -bound / 2, 0.0, bound / 2, bound):
+        parts.append(f'<line x1="{left}" x2="{left + plot_w}" y1="{y(k):.1f}" y2="{y(k):.1f}" '
+                     f'class="{"zero-line" if k == 0 else "gridline"}"/>'
+                     f'<text x="{left - 6}" y="{y(k) + 3.5:.1f}" class="axis-label" '
+                     f'text-anchor="end">{k:+.1f}%</text>')
+    for i, (day, row) in enumerate(recent.iterrows()):
+        x0 = left + i * slot
+        band = float(row["implied"]) * 100.0
+        for mult, cls in ((notable_max, "im-band2"), (noise_max, "im-band1")):
+            parts.append(f'<rect x="{x0 + 1:.1f}" y="{y(band * mult):.1f}" '
+                         f'width="{slot - 2:.1f}" height="{y(-band * mult) - y(band * mult):.1f}" '
+                         f'class="{cls}"/>')
+        move = float(row["move"]) * 100.0
+        tier = str(row["tier"])
+        cls = f"im-bar {tier}" + (" down" if move < 0 else " up")
+        last = i == n - 1
+        if last and partial_last:
+            cls += " partial"
+        y_top, y_bot = (y(move), y(0.0)) if move >= 0 else (y(0.0), y(move))
+        parts.append(f'<rect x="{x0 + (slot - bar_w) / 2:.1f}" y="{y_top:.1f}" '
+                     f'width="{bar_w:.1f}" height="{max(y_bot - y_top, 1.0):.1f}" class="{cls}"/>')
+        if i % 5 == 0 or last:
+            parts.append(f'<text x="{x0 + slot / 2:.1f}" y="{height - 8}" class="axis-label" '
+                         f'text-anchor="middle">{pd.Timestamp(day).strftime("%d %b")}</text>')
+        tip = (f"{pd.Timestamp(day).date()}{' (so far)' if last and partial_last else ''}: "
+               f"S&P {move:+.2f}%, implied ±{band:.2f}% (VIX {float(row['vol_prev']):.2f}), "
+               f"{abs(float(row['multiple'])):.2f}x, {tier}")
+        parts.append(f'<rect x="{x0:.1f}" y="{top}" width="{slot:.2f}" height="{plot_h}" '
+                     f'class="bz-hover"><title>{_esc(tip)}</title></rect>')
+    parts.append("</svg>")
+    legend = (
+        '<div class="bz-legend">'
+        f'<span><i class="bz-key im-key-band1"></i>within {noise_max:g}x implied (noise)</span>'
+        f'<span><i class="bz-key im-key-band2"></i>{noise_max:g}x to {notable_max:g}x</span>'
+        '<span><i class="bz-key im-key-notable"></i>notable move</span>'
+        f'<span><i class="bz-key im-key-beyond"></i>drop beyond {notable_max:g}x</span>'
+        '</div>')
+    return legend + "".join(parts)

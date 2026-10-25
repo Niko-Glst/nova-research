@@ -1,8 +1,10 @@
 """Single-symbol research orchestrator.
 
-Runs the four available analysts for one ticker -- technical, fundamental (with
-niche peer comparison), sentiment, and insider activity -- and combines their
-stances into one weighted verdict with the reasoning behind it.
+Runs the six analysts for one ticker -- technical, fundamental (with niche peer
+comparison), sentiment, insider activity, market flows and market breadth -- and
+combines their stances into one weighted verdict with the reasoning behind it.
+It also reads the S&P 500's last move against the move VIX implied
+(agents/implied_move.py), shown but not scored.
 
 The weights encode how much each leg deserves to be trusted:
 
@@ -12,6 +14,13 @@ The weights encode how much each leg deserves to be trusted:
 - Insider activity (0.6) is a genuine signal but a noisy one -- routine selling
   dominates the data at large caps (see agents/insider_analyst.py).
 - Sentiment (0.4) is the weakest, being a lexicon read over a thin sample.
+- Flows (0.4, added 2026-10-21 at the owner's choice) read the conditions for
+  buybacks and systematic-fund buying or selling. They are proxies with no
+  tested history yet, hence the same weight as sentiment (agents/flow_analyst.py).
+- Breadth (0.5, owner 2026-10-25) reads the equal- over cap-weight S&P 500
+  regime; 0.8 at first, lowered after its backtest found no significant edge.
+
+All weights live in config/scoring.yaml (`legs`).
 
 A leg that could not be computed contributes nothing rather than counting as
 neutral: absence of data is not evidence of balance.
@@ -24,18 +33,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from agents import fa_analyst, insider_analyst, sentiment_analyst, strategy_agent
+from agents import breadth_analyst, fa_analyst, flow_analyst, flow_evidence, implied_move
+from agents import insider_analyst, sentiment_analyst
+from agents import strategy_agent
 from agents import swot as swot_module
 from agents import ta_analyst, thesis as thesis_module
 from backtests import backtest_engine, monte_carlo, outcome_distribution
+from config.settings import load_scoring_config
 
-# How much each leg counts toward the combined score.
-WEIGHTS = {
-    "fundamental": 1.0,
-    "technical": 0.8,
-    "insider": 0.6,
-    "sentiment": 0.4,
-}
+# How much each leg counts toward the combined score (config/scoring.yaml).
+WEIGHTS = {str(k): float(v) for k, v in load_scoring_config()["legs"].items()}
+
+# Version of the scoring model that produced a report (config/scoring.yaml).
+MODEL_VERSION = str(load_scoring_config()["model_version"])
 
 # Stance vocabulary differs per analyst; this maps each to a numeric direction.
 _STANCE_VALUES = {
@@ -64,6 +74,9 @@ class ResearchReport:
     fundamental: fa_analyst.FundamentalRead | None = None
     sentiment: sentiment_analyst.SentimentRead | None = None
     insider: insider_analyst.InsiderRead | None = None
+    flows: flow_analyst.FlowRead | None = None
+    breadth: breadth_analyst.BreadthRead | None = None
+    market_move: implied_move.MarketMove | None = None  # shown, not scored
     errors: dict[str, str] = field(default_factory=dict)
     summary: str = ""
     thesis: thesis_module.Thesis | None = None
@@ -75,6 +88,7 @@ class ResearchReport:
     simulated_returns: object = field(default=None, repr=False)
     buy_hold_equity: object = field(default=None, repr=False)
     outcomes: outcome_distribution.OutcomeDistribution | None = None
+    model_version: str = ""
 
 
 def _stance_value(stance: str | None) -> float | None:
@@ -163,6 +177,37 @@ def analyze(
         errors["insider"] = f"{type(exc).__name__}: {exc}"
         report_progress("insider", "Insider data unavailable")
 
+    flows: flow_analyst.FlowRead | None = None
+    report_progress("flows", "Reading buybacks, systematic-fund conditions and options")
+    try:
+        flows = flow_analyst.analyze(symbol)
+        report_progress("flows", f"Flows read: {flows.signal}")
+    except Exception as exc:
+        errors["flows"] = f"{type(exc).__name__}: {exc}"
+        report_progress("flows", "Flow data unavailable")
+
+    breadth: breadth_analyst.BreadthRead | None = None
+    report_progress("breadth", "Reading market breadth (equal- vs cap-weighted S&P 500)")
+    try:
+        breadth = breadth_analyst.analyze(
+            symbol,
+            sector=fundamental.sector if fundamental and fundamental.sector else None,
+            market_cap=fundamental.metrics.get("market_cap") if fundamental else None,
+        )
+        report_progress("breadth", f"Breadth read: {breadth.signal}")
+    except Exception as exc:
+        errors["breadth"] = f"{type(exc).__name__}: {exc}"
+        report_progress("breadth", "Breadth data unavailable")
+
+    market_move: implied_move.MarketMove | None = None
+    report_progress("market", "Reading the S&P 500's last move against VIX/16")
+    try:
+        market_move = implied_move.analyze()
+        report_progress("market", f"Market move: {market_move.tier}")
+    except Exception as exc:
+        errors["market"] = f"{type(exc).__name__}: {exc}"
+        report_progress("market", "Market move unavailable")
+
     # --- Backtest and simulation (opt-in: it refetches a longer history) ---
     backtest_result = None
     simulation = None
@@ -215,6 +260,8 @@ def analyze(
         "fundamental": fundamental.signal if fundamental else None,
         "sentiment": sentiment.signal if sentiment else None,
         "insider": insider.signal if insider else None,
+        "flows": flows.signal if flows else None,
+        "breadth": breadth.signal if breadth else None,
     }
 
     weighted_sum = 0.0
@@ -247,6 +294,18 @@ def analyze(
         f"from {len(reported)} of {len(WEIGHTS)} analysts)."
     )
 
+    evidence: list[str] = []
+    if flows is not None:
+        try:  # the rank needs the backfill; without it the lines say so
+            reference = flow_evidence.issuance_reference()
+        except Exception:
+            reference = None
+        evidence = flow_evidence.evidence_lines(flows, reference)
+    if breadth is not None and breadth.regime is not None:
+        evidence.append(flow_evidence.breadth_line(breadth))
+    if market_move is not None:
+        evidence.append(flow_evidence.market_move_line(market_move))
+
     report_progress("done", f"{verdict.capitalize()} (score {score:+.2f})")
 
     return ResearchReport(
@@ -258,19 +317,23 @@ def analyze(
         fundamental=fundamental,
         sentiment=sentiment,
         insider=insider,
+        flows=flows,
+        breadth=breadth,
+        market_move=market_move,
         errors=errors,
         summary=summary,
         thesis=thesis_module.build_thesis(
-            symbol, fundamental, technical, insider, sentiment
+            symbol, fundamental, technical, insider, sentiment, evidence
         ),
         swot=swot_module.build_swot(
-            symbol, fundamental, technical, insider, sentiment
+            symbol, fundamental, technical, insider, sentiment, evidence
         ),
         backtest=backtest_result,
         monte_carlo=simulation,
         simulated_returns=simulated,
         buy_hold_equity=buy_hold,
         outcomes=outcomes,
+        model_version=MODEL_VERSION,
     )
 
 
@@ -293,6 +356,7 @@ def format_report(report: ResearchReport) -> str:
         f"  VERDICT: {report.verdict.upper()}",
         f"  Score:      {report.score:+.2f}  (-1 bearish .. +1 bullish)",
         f"  Confidence: {report.confidence:.0%}  (share of analysts reporting)",
+        f"  Model:      {report.model_version or 'unversioned'}",
         "",
     ]
 
@@ -382,6 +446,73 @@ def format_report(report: ResearchReport) -> str:
             lines.append(f"    - {reason}")
         lines.append("")
 
+    # --- Flows ------------------------------------------------------------
+    if report.flows is not None:
+        flows = report.flows
+        lines += ["-" * width, f"  MARKET FLOWS -> {flows.signal.upper()}", "-" * width]
+        for component in flows.components:
+            mark = "n/a" if component.score is None else f"{component.score:+.2f}"
+            flag = f"  [{component.flag}]" if component.flag else ""
+            lines.append(f"  [{mark:>5}] {component.label}{flag}")
+            lines.append(f"        {component.reason}")
+        if flows.quarters:
+            lines += ["", "  Buybacks by quarter (shown, not scored):"]
+            for q in flows.quarters:
+                move = "" if q.price_return is None else f"   stock {q.price_return:+.1%}"
+                lines.append(f"    {q.quarter_end}  bought back {_format_money(q.repurchased):>10}"
+                             f"  issued {_format_money(q.issued):>10}{move}")
+        options = flows.options
+        if options is not None:
+            lines += [
+                "",
+                f"  Options to {options.expirations[-1]} (shown, not scored):",
+                f"    put/call open interest {options.put_call_ratio:.2f} "
+                f"({options.put_open_interest:,} puts, {options.call_open_interest:,} calls)",
+                "    busiest call strikes: " + ", ".join(
+                    f"{k:g} ({v:,})" for k, v in options.top_call_strikes),
+                "    busiest put strikes:  " + ", ".join(
+                    f"{k:g} ({v:,})" for k, v in options.top_put_strikes),
+            ]
+            if options.atm_implied_vol == options.atm_implied_vol:  # not NaN
+                lines.append(f"    at-the-money implied vol {options.atm_implied_vol:.0%} "
+                             f"({options.atm_expiration}) vs {options.realised_vol:.0%} realised")
+        elif flows.options_note:
+            lines += ["", f"  Options: {flows.options_note}"]
+        ownership = []
+        if flows.institutions_pct is not None:
+            ownership.append(f"institutions {flows.institutions_pct:.0%}")
+        if flows.insiders_pct is not None:
+            ownership.append(f"insiders {flows.insiders_pct:.0%}")
+        if ownership:
+            lines += ["", f"  Ownership (shown, not scored): {', '.join(ownership)}"]
+        lines += ["", "  Proxies for conditions, not observed positions. Thresholds set by "
+                      "judgement, not fitted.", ""]
+
+    # --- Breadth ----------------------------------------------------------
+    if report.breadth is not None:
+        breadth = report.breadth
+        lines += ["-" * width, f"  MARKET BREADTH -> {breadth.signal.upper()}", "-" * width]
+        score = "n/a" if breadth.score is None else f"{breadth.score:+.2f}"
+        lines.append(f"  Group: {breadth.group}   score {score}")
+        for reason in breadth.reasons:
+            lines.append(f"    - {reason}")
+        lines.append("")
+
+    # --- Market move vs implied ---------------------------------------------
+    if report.market_move is not None:
+        mm = report.market_move
+        lines += ["-" * width, f"  MARKET MOVE VS IMPLIED (VIX/16) -> {mm.tier.upper()}",
+                  "-" * width]
+        lines.append(f"    - {mm.describe()}")
+        if mm.next_day_implied is not None:
+            lines.append(f"    - Next-day implied (VIX1D {mm.next_day_vol_prev:.2f}): "
+                         f"±{mm.next_day_implied:.2%}, the move was "
+                         f"{abs(mm.next_day_multiple):.2f}x that.")
+        lines.append(f"    - {mm.recent_text()}")
+        if mm.base_text():
+            lines.append(f"    - {mm.base_text()}")
+        lines += ["", "  Shown, not scored.", ""]
+
     # --- Sentiment --------------------------------------------------------
     if report.sentiment is not None:
         sentiment = report.sentiment
@@ -465,6 +596,10 @@ def format_report(report: ResearchReport) -> str:
         if thesis.breaks_if:
             lines += ["", "  BREAKS IF:"]
             for item in thesis.breaks_if:
+                lines.append(f"    - {item}")
+        if thesis.evidence:
+            lines += ["", "  FLOW EVIDENCE (inputs, not verdicts):"]
+            for item in thesis.evidence:
                 lines.append(f"    - {item}")
         lines.append("")
 

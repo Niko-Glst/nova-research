@@ -19,14 +19,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional: fast Kendall tau in correlations/ (built-in fallback without it) and
+# independent reference checks in the tests. See docs/PROJECT_CONTEXT.md section 8.
+stats = [
+    "scipy>=1.11",
+]
 dev = [
     "pytest>=7.0",
     "pre-commit>=3.0",
     "detect-secrets>=1.4",
+    "scipy>=1.11",
 ]
 
 [tool.setuptools.packages.find]
-include = ["agents*", "backtests*", "config*", "common*", "scripts*"]
+include = ["agents*", "backtests*", "config*", "common*", "correlations*", "scripts*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

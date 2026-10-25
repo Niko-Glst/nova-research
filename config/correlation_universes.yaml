@@ -1,0 +1,143 @@
+# Universes and market conventions for the correlation module (correlations/).
+#
+# Prices are fetched through agents.ta_analyst.fetch_price_history, i.e. from
+# yfinance, which config/allowed_sources.yaml already covers. Nothing in this
+# file adds an external source.
+#
+# Any peer group under `peer_groups` in config/allowed_sources.yaml can also be
+# used as a universe by name (e.g. --universe semiconductors).
+
+universes:
+  cross_asset:
+    description: >-
+      US and international equity, government bonds, gold and oil, plus a few
+      single stocks to swap freely. The ETFs are the classic diversification
+      pairs: equity vs treasuries, equity vs gold.
+    symbols: [SPY, QQQ, EFA, EEM, TLT, IEF, GLD, USO, AAPL, NVDA, SU.PA]
+    # Regime splits and the market factor use this series.
+    market_proxy: SPY
+    # Group labels drive the market + group factor model (phase 2).
+    groups:
+      SPY: us_equity
+      QQQ: us_equity
+      EFA: intl_equity
+      EEM: em_equity
+      TLT: treasuries
+      IEF: treasuries
+      GLD: commodities
+      USO: commodities
+      AAPL: single_stock
+      NVDA: single_stock
+      SU.PA: single_stock
+
+  global_multi_asset:
+    description: >-
+      Thirty liquid US-listed ETFs across equity size and sectors, regions,
+      government and credit bonds, commodities and real estate. Broad enough
+      for random matrix theory, PCA and clustering to find structure (N = 30),
+      and every series covers the 2008 crisis: the common history starts with
+      HYG on 2007-04-11.
+    symbols: [SPY, QQQ, IWM,
+              XLB, XLE, XLF, XLI, XLK, XLP, XLU, XLV, XLY,
+              EFA, EEM, EWJ, EWG, EWU, EWZ, FXI,
+              TLT, IEF, SHY, LQD, TIP, HYG,
+              GLD, SLV, USO, DBC, VNQ]
+    market_proxy: SPY
+    groups:
+      SPY: us_equity
+      QQQ: us_equity
+      IWM: us_equity
+      XLB: us_sector
+      XLE: us_sector
+      XLF: us_sector
+      XLI: us_sector
+      XLK: us_sector
+      XLP: us_sector
+      XLU: us_sector
+      XLV: us_sector
+      XLY: us_sector
+      EFA: developed_intl
+      EWJ: developed_intl
+      EWG: developed_intl
+      EWU: developed_intl
+      EEM: emerging
+      EWZ: emerging
+      FXI: emerging
+      TLT: government_bonds
+      IEF: government_bonds
+      SHY: government_bonds
+      TIP: government_bonds
+      LQD: credit
+      HYG: credit
+      GLD: precious_metals
+      SLV: precious_metals
+      USO: commodities
+      DBC: commodities
+      VNQ: real_estate
+
+  us_mega_cap:
+    description: >-
+      The largest US technology stocks against the market (SPY, QQQ) and
+      long treasuries (TLT). Common history starts with GOOGL in August 2004,
+      so the 2008 crisis is covered (META, listed 2012, is left out for that
+      reason; add it with --symbols when a shorter history is fine).
+    symbols: [AAPL, MSFT, GOOGL, AMZN, NVDA, SPY, QQQ, TLT]
+    market_proxy: SPY
+    groups:
+      AAPL: mega_cap_tech
+      MSFT: mega_cap_tech
+      GOOGL: mega_cap_tech
+      AMZN: mega_cap_tech
+      NVDA: mega_cap_tech
+      SPY: us_equity
+      QQQ: us_equity
+      TLT: treasuries
+
+# Listing currency and region by Yahoo ticker suffix. The suffix is the text
+# after the last "." ("" for none). An unknown suffix is an error, never a
+# guess: a wrong currency silently corrupts every base-currency figure.
+# Region decides which pairs are "cross-continent" for the lag-1 analysis.
+exchanges:
+  "":   {currency: USD, region: americas}
+  ".PA": {currency: EUR, region: europe}   # Euronext Paris
+  ".AS": {currency: EUR, region: europe}   # Euronext Amsterdam
+  ".BR": {currency: EUR, region: europe}   # Euronext Brussels
+  ".DE": {currency: EUR, region: europe}   # Xetra
+  ".MI": {currency: EUR, region: europe}   # Borsa Italiana
+  ".MC": {currency: EUR, region: europe}   # Madrid
+  ".SW": {currency: CHF, region: europe}   # SIX Swiss
+  ".L":  {currency: GBp, region: europe}   # London, quoted in pence
+
+# Symbols the suffix rule cannot place. Indices ("^...") always need an entry
+# here, because "^STOXX50E" has no suffix yet is not in USD.
+symbol_overrides:
+  "^VIX": {currency: USD, region: americas}
+
+# Minor units: price in the major currency = price / divisor.
+minor_units:
+  GBp: {major: GBP, divisor: 100}
+
+# How to build "units of the currency per 1 EUR" from FRED H.10 series (noon
+# New York buying rates; see correlations/fred.py for why not Yahoo FX).
+# Every conversion pivots through EUR: price_EUR = price_local / rate_local,
+# price_USD = price_EUR * rate_USD. Series must be allowlisted under `fred`
+# in config/allowed_sources.yaml.
+fx_per_eur:
+  USD: {multiply: [DEXUSEU]}              # USD per EUR
+  CHF: {multiply: [DEXSZUS, DEXUSEU]}     # CHF per USD x USD per EUR
+  GBP: {multiply: [DEXUSEU], divide: [DEXUSUK]}   # USD per EUR / USD per GBP
+
+# Named stress windows (inclusive dates), used in phase 2.
+stress_windows:
+  gfc_2008:
+    label: 2008-09 global financial crisis
+    start: 2008-09-01
+    end: 2009-03-31
+  covid_2020:
+    label: March 2020 COVID crash
+    start: 2020-02-19
+    end: 2020-04-30
+  rate_shock_2022:
+    label: 2022 rate shock
+    start: 2022-01-01
+    end: 2022-10-31

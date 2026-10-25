@@ -187,3 +187,48 @@ class TestClassify:
     def test_high_leverage_counts_against(self):
         _, reasons = fa._classify({"debt_to_equity": 350.0}, None)
         assert any("leverage" in r.lower() for r in reasons)
+
+
+class TestPlaceholderMargins:
+    """Regression: yfinance reports a margin it cannot compute as exactly 0.0.
+
+    Values are ImmunityBio (IBRX) and Summit Therapeutics (SMMT) as yfinance
+    returned them on 2026-10-17.
+    """
+
+    IBRX = {
+        "symbol": "IBRX", "shortName": "ImmunityBio, Inc.", "industry": "Biotechnology",
+        "sector": "Healthcare", "totalRevenue": 165_800_000, "profitMargins": 0.0,
+        "netIncomeToCommon": -992_356_992, "operatingMargins": -1.20408,
+    }
+
+    def test_zero_net_margin_is_recomputed_from_net_income(self):
+        out = fa.extract_fundamentals(self.IBRX, "IBRX")
+        assert out["profit_margin"] == pytest.approx(-992_356_992 / 165_800_000)
+        assert out["operating_margin"] == pytest.approx(-1.20408)  # a real value: untouched
+        assert "recomputed" in out["_data_notes"]
+
+    def test_the_repaired_margin_now_counts_against(self):
+        out = fa.extract_fundamentals(self.IBRX, "IBRX")
+        _, reasons = fa._classify({k: v for k, v in out.items() if not k.startswith("_")}, None)
+        assert any("Negative net margin" in r for r in reasons)
+
+    def test_margins_without_revenue_are_dropped(self):
+        smmt = {"symbol": "SMMT", "shortName": "Summit", "totalRevenue": 0,
+                "profitMargins": 0.0, "operatingMargins": 0.0, "netIncomeToCommon": -856e6}
+        out = fa.extract_fundamentals(smmt, "SMMT")
+        assert "profit_margin" not in out and "operating_margin" not in out
+        assert "undefined" in out["_data_notes"]
+
+    def test_zero_margin_without_net_income_is_missing(self):
+        info = {**self.IBRX}
+        del info["netIncomeToCommon"]
+        assert "profit_margin" not in fa.extract_fundamentals(info, "IBRX")
+
+    def test_real_margins_are_untouched(self):
+        info = {"symbol": "AAPL", "totalRevenue": 4e11, "profitMargins": 0.24,
+                "grossMargins": 0.46, "operatingMargins": 0.31, "netIncomeToCommon": 9.6e10}
+        out = fa.extract_fundamentals(info, "AAPL")
+        assert (out["profit_margin"], out["gross_margin"], out["operating_margin"]) == (
+            0.24, 0.46, 0.31)
+        assert out["_data_notes"] == ""

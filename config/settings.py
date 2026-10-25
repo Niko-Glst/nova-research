@@ -147,6 +147,26 @@ def load_allowed_sources() -> dict:
     return data
 
 
+SCORING_PATH = ROOT_DIR / "config" / "scoring.yaml"
+
+
+@lru_cache(maxsize=1)
+def load_scoring_config() -> dict:
+    """Load config/scoring.yaml: model version, leg weights and flow rules."""
+    if not SCORING_PATH.exists():
+        raise FileNotFoundError(f"Scoring config not found at {SCORING_PATH}.")
+    with SCORING_PATH.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    if not isinstance(data, dict):
+        raise ValueError(f"{SCORING_PATH} must parse to a mapping, got {type(data).__name__}.")
+    return data
+
+
+def get_sec_user_agent() -> str:
+    """User-Agent for SEC EDGAR: SEC asks for a descriptive name and a contact email."""
+    return _require_env("SEC_USER_AGENT")
+
+
 def get_rate_limits() -> dict[str, float]:
     """Return the rate-limit defaults from the allowlist, with safe fallbacks."""
     limits = load_allowed_sources().get("rate_limits") or {}

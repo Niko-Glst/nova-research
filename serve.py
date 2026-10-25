@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import queue
+import sys
 import threading
 import traceback
 import webbrowser
@@ -30,7 +31,11 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from agents import html_report, report_archive, research_report
+from agents import html_report, report_archive, research_report, signal_snapshots
+from config.settings import ROOT_DIR
+
+# The project's own reports folder, whatever directory the server starts in.
+REPORTS_DIR = ROOT_DIR / "reports"
 
 # Ticker charset. Real symbols are letters with an optional dot or hyphen
 # (BRK.B, RDS-A); anything else is rejected before it reaches a provider.
@@ -40,6 +45,8 @@ _TICKER_MAX_LENGTH = 12
 # re-running the analysis. Keyed by job id.
 _reports: dict[str, research_report.ResearchReport] = {}
 _reports_lock = threading.Lock()
+# Report files and the snapshot history are shared by every analysis thread.
+_files_lock = threading.Lock()
 
 
 def _valid_ticker(raw: str) -> str | None:
@@ -158,6 +165,9 @@ const STAGES = [
   ["fundamental", "Fundamental"],
   ["sentiment",   "Sentiment"],
   ["insider",     "Insider"],
+  ["flows",       "Flows"],
+  ["breadth",     "Breadth"],
+  ["market",      "Market move vs VIX/16"],
   ["simulation",  "Simulation"],
 ];
 
@@ -375,8 +385,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(encoded)
-        except (BrokenPipeError, ConnectionAbortedError):
-            pass
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass  # the browser went away; nothing to send it
 
     def _send_sse_headers(self) -> None:
         self.send_response(200)
@@ -400,8 +410,23 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _write_report_file(report: research_report.ResearchReport) -> None:
-    """Also save the report to reports/, matching what the CLI produces."""
-    report_archive.save_report(report, "reports")
+    """Also save the report to reports/, matching what the CLI produces.
+
+    Two analyses can finish at once (two browser tabs), and both rewrite the
+    reports index and append to the snapshot file, so the writes take turns. A
+    failed write is reported on the console; the report itself is still served.
+    """
+    with _files_lock:
+        try:
+            report_archive.save_report(report, REPORTS_DIR)
+        except Exception as exc:
+            print(f"{report.symbol}: report file not saved -- {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+        try:  # build the point-in-time signal history; never fail the run over it
+            signal_snapshots.record(report)
+        except Exception as exc:
+            print(f"{report.symbol}: signal snapshot not saved -- {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -437,4 +462,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from common.console import safe_console
+
+    safe_console()
     raise SystemExit(main())

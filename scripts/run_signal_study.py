@@ -44,4 +44,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    from common.console import safe_console
+
+    safe_console()
     raise SystemExit(main())

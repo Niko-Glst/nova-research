@@ -40,6 +40,8 @@ class Swot:
     weaknesses: list[SwotItem] = field(default_factory=list)
     opportunities: list[SwotItem] = field(default_factory=list)
     threats: list[SwotItem] = field(default_factory=list)
+    # Flow readings as evidence (agents/flow_evidence.py): inputs, not quadrant items.
+    evidence: list[str] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -295,10 +297,14 @@ def build_swot(
     technical: TechnicalRead | None,
     insider: InsiderRead | None,
     sentiment: SentimentRead | None,
+    evidence: list[str] | None = None,
 ) -> Swot:
-    """Derive a SWOT from the measured figures across all analysts."""
+    """Derive a SWOT from the measured figures across all analysts.
+
+    `evidence` lines are listed beside the quadrants and never placed in them.
+    """
     if fundamental is None:
-        return Swot(symbol=symbol)
+        return Swot(symbol=symbol, evidence=list(evidence or []))
 
     strengths, weaknesses = _internal(fundamental.metrics)
     opportunities, threats = _external(fundamental, technical, insider, sentiment)
@@ -309,4 +315,5 @@ def build_swot(
         weaknesses=weaknesses,
         opportunities=opportunities,
         threats=threats,
+        evidence=list(evidence or []),
     )

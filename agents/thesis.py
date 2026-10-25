@@ -14,7 +14,7 @@ filing -- which is the point of writing a thesis down.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from agents.fa_analyst import FundamentalRead
 from agents.insider_analyst import InsiderRead
@@ -49,6 +49,9 @@ class Thesis:
     breaks_if: list[str] = field(default_factory=list)
     conditions_met: int = 0
     conditions_total: int = 0
+    # Flow readings as numbered, sourced evidence (agents/flow_evidence.py).
+    # Inputs, not verdicts: they never change the stance, summary or conditions.
+    evidence: list[str] = field(default_factory=list)
 
     @property
     def met_fraction(self) -> float:
@@ -351,8 +354,23 @@ def build_thesis(
     technical: TechnicalRead | None,
     insider: InsiderRead | None,
     sentiment: SentimentRead | None,
+    evidence: list[str] | None = None,
 ) -> Thesis:
-    """Assemble the conditions that would have to hold for a constructive view."""
+    """Assemble the conditions that would have to hold for a constructive view.
+
+    `evidence` lines are attached as they are; they do not enter the conditions.
+    """
+    thesis = _build_thesis(symbol, fundamental, technical, insider, sentiment)
+    return replace(thesis, evidence=list(evidence or []))
+
+
+def _build_thesis(
+    symbol: str,
+    fundamental: FundamentalRead | None,
+    technical: TechnicalRead | None,
+    insider: InsiderRead | None,
+    sentiment: SentimentRead | None,
+) -> Thesis:
     if fundamental is None:
         return Thesis(
             symbol=symbol,
