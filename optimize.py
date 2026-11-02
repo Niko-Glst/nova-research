@@ -51,8 +51,8 @@ METHOD_LABELS = {
 CURRENT_STRATEGY = (
     "Your current pipeline trades one rule: long while the 50-day average is above the "
     "200-day average, cash otherwise, executed the next day with 10 bps per side. The "
-    "analyst verdict (fundamental 1.0, technical 0.8, insider 0.6, sentiment 0.4) is a "
-    "report score and places no trades. In the weighted framework the crossover is the "
+    "analyst verdict (weights in config/scoring.yaml) is a report score and places no "
+    "trades. In the weighted framework the crossover is the "
     "special case: weight 1 on 'trend', 0 on everything else, threshold 0."
 )
 

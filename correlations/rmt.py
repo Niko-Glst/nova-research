@@ -66,10 +66,6 @@ RMT_MIN_ASSETS = 20
 # eigenvalue of pure noise.
 TRACY_WIDOM_95 = 0.9793
 
-# Bandwidth factor for the eigenvalue density drawn in the report (Silverman's
-# robust rule). Used for display only; it plays no part in the denoising.
-SILVERMAN_FACTOR = 0.9
-
 
 @dataclass(frozen=True)
 class DenoiseResult:
@@ -89,17 +85,6 @@ def marchenko_pastur_bounds(sigma2: float, q: float) -> tuple[float, float]:
     """Edges of the Marchenko-Pastur band for variance sigma2 and T/N = q."""
     root = math.sqrt(1.0 / q)
     return sigma2 * (1.0 - root) ** 2, sigma2 * (1.0 + root) ** 2
-
-
-def marchenko_pastur_pdf(x: np.ndarray, sigma2: float, q: float) -> np.ndarray:
-    """Marchenko-Pastur density at the points `x` (zero outside the band)."""
-    lo, hi = marchenko_pastur_bounds(sigma2, q)
-    x = np.asarray(x, dtype=float)
-    inside = (x > lo) & (x < hi)
-    pdf = np.zeros_like(x)
-    xi = x[inside]
-    pdf[inside] = q / (2.0 * math.pi * sigma2 * xi) * np.sqrt((hi - xi) * (xi - lo))
-    return pdf
 
 
 def tracy_widom_edge(sigma2: float, n_observations: int, n_assets: int) -> float:
@@ -123,21 +108,6 @@ def noise_variance(eigenvalues: np.ndarray, n_observations: int) -> float:
     if values[0] <= tracy_widom_edge(1.0, n_observations, n):
         return 1.0
     return float(max(1.0 - values[0] / n, 1e-6))
-
-
-def gaussian_kde(samples: np.ndarray, points: np.ndarray, bandwidth: float) -> np.ndarray:
-    """Gaussian kernel density estimate of `samples`, evaluated at `points`."""
-    samples = np.asarray(samples, dtype=float)[:, None]
-    z = (np.asarray(points, dtype=float)[None, :] - samples) / bandwidth
-    return np.exp(-0.5 * z**2).sum(axis=0) / (len(samples) * bandwidth * math.sqrt(2 * math.pi))
-
-
-def silverman_bandwidth(samples: np.ndarray) -> float:
-    samples = np.asarray(samples, dtype=float)
-    spread = samples.std(ddof=1)
-    q75, q25 = np.percentile(samples, [75, 25])
-    robust = min(spread, (q75 - q25) / 1.34) or spread
-    return float(SILVERMAN_FACTOR * robust * len(samples) ** (-0.2)) or 1e-3
 
 
 def denoise(correlation: np.ndarray, n_observations: int) -> DenoiseResult:

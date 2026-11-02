@@ -8,7 +8,7 @@ Stable public API (see correlations/estimators.py for details)::
     risk = estimate_covariance(data.returns)                   # annualised, 252 days,
     risk.covariance, risk.volatility, risk.warnings            # Ledoit-Wolf by default
 
-    from correlations import estimate_correlation, CorrelationEstimate, run_analysis
+    from correlations import estimate_correlation, CorrelationEstimate
 
 Research output only -- nothing in this package places an order.
 """
@@ -34,15 +34,7 @@ __all__ = [
     "estimate_correlation",
     "estimate_covariance",
     "load_returns",
-    "run_analysis",
 ]
-
-
-def run_analysis(*args, **kwargs):
-    """Lazy wrapper for correlations.analysis.run_analysis (avoids a heavy import)."""
-    from correlations.analysis import run_analysis as _run
-
-    return _run(*args, **kwargs)
 
 
 def load_returns(*args, **kwargs):

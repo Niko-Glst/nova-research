@@ -1,8 +1,5 @@
 #!/bin/sh
-# Fallback secret-scan pre-commit hook, for anyone who hasn't run
-# `pre-commit install` (which wires up detect-secrets instead — prefer that).
-#
-# Enable this hook with:
+# Secret-scan pre-commit hook. Enable it with:
 #   git config core.hooksPath .git-hooks
 #
 # Blocks the commit if a staged file looks like it contains a secret: a long
@@ -22,7 +19,7 @@ found=0
 for f in $staged_files; do
     # Skip files that don't exist (e.g. deletions) or are themselves ignore/example files.
     case "$f" in
-        .env.example|*.md|.pre-commit-config.yaml|.secrets.baseline) continue ;;
+        .env.example|*.md) continue ;;
     esac
     if [ -f "$f" ]; then
         if git show ":$f" | grep -Eiq "$pattern"; then

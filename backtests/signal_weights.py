@@ -67,7 +67,6 @@ SEARCH_TRIALS = 2000
 SEARCH_CHUNK = 250
 SEARCH_SEED = 7
 
-METHODS = ("ridge", "max_sharpe", "search", "equal")
 
 
 @dataclass(frozen=True)

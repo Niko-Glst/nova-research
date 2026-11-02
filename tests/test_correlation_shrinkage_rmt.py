@@ -97,12 +97,6 @@ class TestLedoitWolfConstantCorrelation:
 
 
 class TestMarchenkoPastur:
-    def test_density_integrates_to_one(self):
-        lo, hi = rmt.marchenko_pastur_bounds(1.0, 4.0)
-        x = np.linspace(lo, hi, 200_001)
-        mass = np.trapezoid(rmt.marchenko_pastur_pdf(x, 1.0, 4.0), x)
-        assert mass == pytest.approx(1.0, abs=1e-3)
-
     def test_bounds(self):
         # q = 4: (1 -+ 1/2)^2 = 0.25 and 2.25.
         assert rmt.marchenko_pastur_bounds(1.0, 4.0) == pytest.approx((0.25, 2.25))

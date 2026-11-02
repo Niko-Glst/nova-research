@@ -45,45 +45,6 @@ class TestCredentialLoading:
             settings.get_reddit_credentials()
 
 
-class TestBrokerSandboxGuard:
-    @pytest.fixture(autouse=True)
-    def _broker_keys(self, monkeypatch):
-        monkeypatch.setenv("BROKER_API_KEY", "k")
-        monkeypatch.setenv("BROKER_API_SECRET", "s")
-
-    @pytest.mark.parametrize(
-        "url",
-        [
-            "https://paper-api.example.com/v2",
-            "https://sandbox.example.com",
-            "https://demo.broker.test",
-            "http://localhost:8080",
-        ],
-    )
-    def test_sandbox_endpoints_are_accepted(self, monkeypatch, url):
-        monkeypatch.setenv("BROKER_BASE_URL", url)
-        assert settings.get_broker_sandbox_credentials().base_url == url
-
-    @pytest.mark.parametrize(
-        "url",
-        [
-            "https://api.example.com/v2",
-            "https://live.broker.com",
-            "https://trading.broker.com/api",
-        ],
-    )
-    def test_live_endpoints_are_refused(self, monkeypatch, url):
-        """This is the guardrail that keeps the project simulation-only."""
-        monkeypatch.setenv("BROKER_BASE_URL", url)
-        with pytest.raises(ValueError, match="paper/sandbox"):
-            settings.get_broker_sandbox_credentials()
-
-    def test_malformed_url_is_refused(self, monkeypatch):
-        monkeypatch.setenv("BROKER_BASE_URL", "not-a-url-sandbox")
-        with pytest.raises(ValueError, match="absolute http"):
-            settings.get_broker_sandbox_credentials()
-
-
 class TestAllowedSources:
     def test_allowlist_loads_expected_sections(self):
         config = settings.load_allowed_sources()

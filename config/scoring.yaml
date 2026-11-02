@@ -14,7 +14,10 @@
 #          a breadth regime of 0 (in a zone, no turn yet) is no call and leaves
 #          the leg out instead of counting as neutral; the flows leg takes no
 #          stance from the market part alone. 2.0.0 runs can be rescored.
-model_version: "3.0.0"
+#   4.0.0  2026-11-02, a currency fix that can move scores where a stock trades
+#          and reports in different currencies: price/sales and price/book in one
+#          currency, and the mega-cap test in dollars. USD/USD stocks are unchanged.
+model_version: "4.0.0"
 
 # Layout of the snapshot store. 1 = the wide CSV (data/snapshots/signals.csv);
 # 2 = long format, parquet parts under data/snapshots/long/.
@@ -70,6 +73,96 @@ breadth:
   backtest_sector_leaders: [XLK]
   output_csv: reports/breadth_backtest.csv
   output_html: reports/breadth_backtest.html
+
+# Regional benchmarks (owner 2026-10-28): what a stock is measured against when
+# its past verdicts are settled (agents/track_record.py). Keyed by the Yahoo
+# listing suffix (text after the last "."; "" for US). Local *price* indices, as
+# in TradingAgents: they exclude dividends while the stock's adjusted prices
+# include them, a small bias (~2-3%/yr) in the stock's favour. US uses SPY, whose
+# adjusted prices include dividends. Each symbol checked on Yahoo 2026-10-28;
+# Oslo (OBX.OL) left out: Yahoo serves one row. A suffix not listed has no
+# benchmark: the settlement says so rather than guessing.
+benchmarks:
+  "": SPY
+  ".AS": "^AEX"            # Euronext Amsterdam
+  ".PA": "^FCHI"           # CAC 40
+  ".DE": "^GDAXI"          # DAX
+  ".BR": "^BFX"            # BEL 20
+  ".MI": FTSEMIB.MI        # FTSE MIB
+  ".MC": "^IBEX"           # IBEX 35
+  ".SW": "^SSMI"           # SMI
+  ".L": "^FTSE"            # FTSE 100
+  ".HK": "^HSI"            # Hang Seng
+  ".T": "^N225"            # Nikkei 225
+  ".TO": "^GSPTSE"         # S&P/TSX
+  ".AX": "^AXJO"           # S&P/ASX 200
+  ".CO": "^OMXC25"         # OMX Copenhagen 25 (from 2016-12)
+  ".ST": "^OMX"            # OMX Stockholm 30 (from 2008-11)
+  ".HE": "^OMXH25"         # OMX Helsinki 25 (from 2013-03)
+  ".LS": PSI20.LS          # PSI 20 (from 2013-04)
+  ".VI": "^ATX"            # ATX
+  ".TA": "^TA125.TA"       # TA-125 (Tel Aviv; from 1992)
+
+# The risk gate and position size in every report (agents/risk_read.py): how much
+# history they read. Shown, never scored.
+risk_read:
+  lookback_years: 5
+
+# Currencies (owner 2026-11-02). Yahoo quotes some markets in a minor unit and
+# many companies report in another currency than they trade in, and it divides
+# one by the other without converting (agents/currency.py, agents/fa_analyst.py).
+currency:
+  minor_units:             # Yahoo's code: major currency, units per major
+    ILA: {major: ILS, divisor: 100}    # Tel Aviv: agorot
+    GBp: {major: GBP, divisor: 100}    # London: pence
+    GBX: {major: GBP, divisor: 100}
+    ZAc: {major: ZAR, divisor: 100}    # Johannesburg: cents
+  symbols: {USD: "$", EUR: "€", GBP: "£", JPY: "¥"}   # others print as their code
+
+# Track record: settling recorded verdicts against what followed (owner
+# 2026-10-28). Shown, never fed back into a score or a weight.
+track_record:
+  horizons:                # label: trading sessions after the entry
+    1W: 5
+    1M: 21
+    3M: 63
+    6M: 126
+  entry: first_close_after_run   # the first close after the run's timestamp
+  output_csv: reports/track_record.csv
+  output_html: reports/track_record.html
+
+# Searching by name when a ticker finds nothing (owner 2026-10-28): non-US
+# listings often have no news under their ticker (BESI.AS: 0 articles) but plenty
+# under their company name. Shown and scored like any other news; still filtered
+# by the news allowlist.
+name_search:
+  news_count: 20                 # Yahoo search results per query
+  # Reddit also searches the bare ticker root ("BESI" for BESI.AS) next to the
+  # quoted company name. Roots shorter than this, or not all letters, are skipped
+  # as too ambiguous ("SU" for SU.PA is also Suncor's US ticker; "0522" is a number).
+  # Judgement, not fitted.
+  reddit_root_min_length: 3
+
+# Position-trading rule (owner 2026-10-28, after ThinkMarkets' "What is position
+# trading" guide): a pullback in an uptrend, taken only when every condition
+# holds (agents/position_strategy.py). Standard settings unless marked judgement.
+position_strategy:
+  ma_fast: 50              # guide: "50, 100 and 200 periods"
+  ma_mid: 100
+  ma_slow: 200
+  swing_weeks: 2           # judgement: a weekly swing needs 2 lower/higher weeks each side,
+                           # and is only known once those weeks have closed
+  fib_zone: [0.5, 0.618]   # ThinkMarkets' Fibonacci page: trade the 50-61.8% retracement
+  support_tolerance: 0.02  # judgement: within 2% above a support (weekly swing low, 100/200-day)
+  setup_window: 10         # judgement: sessions the pullback setup may precede the trigger
+  rsi_trigger: 50          # guide: momentum turns up when RSI crosses back above 50
+  # Bollinger Bands: not in the guide; added as a condition at the owner's request
+  # (2026-10-29): within the setup window a close at or below the lower band, and
+  # the close back inside the bands when the trade is taken (the dip exhausted).
+  bollinger_days: 20
+  bollinger_sd: 2.0
+  fib_extensions: [1.272, 1.618]   # shown as reference targets ("project future targets")
+  fees_bps: 10
 
 # Market move against the move VIX implied (owner 2026-10-25). VIX is the S&P
 # 500's 30-day implied volatility per year; divided by sqrt(252) = 15.87 (the

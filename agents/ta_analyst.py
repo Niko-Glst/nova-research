@@ -10,6 +10,7 @@ Research output only — nothing here places an order.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -69,6 +70,14 @@ WEIGHT_MACD = 0.5
 # this floor, a histogram of +0.01 on a $16 stock casts a full bullish vote.
 MACD_NOISE_FLOOR_PCT = 0.001  # 0.1% of price
 
+# Yahoo answers with an empty history when it throttles, and a throttle outlasts
+# the 2-second request pace (NBIS's 5-year history came back empty mid-run on
+# 2026-10-30, then 509 rows a minute later). Extra waits before each retry; an
+# answer still empty after them means no such symbol, remembered for the run.
+EMPTY_HISTORY_WAITS = (3.0, 10.0)
+_known_empty: set[tuple[str, str]] = set()
+_sleep = time.sleep  # replaced in tests
+
 
 @dataclass(frozen=True)
 class TechnicalRead:
@@ -87,11 +96,24 @@ def fetch_price_history(symbol: str, period: str = "1y") -> pd.DataFrame:
     if not symbol or not symbol.strip():
         raise ValueError("symbol must be a non-empty string")
 
-    get_limiter("yfinance").wait()
-    ticker = yf.Ticker(symbol.strip().upper())
-    history = ticker.history(period=period, auto_adjust=True)
+    key = (symbol.strip().upper(), period)
+    ticker = yf.Ticker(key[0])
+    # Yahoo now and then answers a valid symbol with an empty history ("possibly
+    # delisted"): SPY did so mid-run on 2026-10-25 and the flows leg lost a part.
+    # Retrying after growing waits tells a throttle from a bad symbol.
+    history = None
+    waits = () if key in _known_empty else EMPTY_HISTORY_WAITS
+    for attempt in range(len(waits) + 1):
+        if attempt:
+            _sleep(waits[attempt - 1])
+        get_limiter("yfinance").wait()
+        history = ticker.history(period=period, auto_adjust=True)
+        if history is not None and not history.empty:
+            _known_empty.discard(key)
+            break
 
     if history is None or history.empty:
+        _known_empty.add(key)
         raise ValueError(
             f"No price history returned for {symbol!r} (period={period!r}). "
             f"Check that the ticker exists and is spelled correctly."

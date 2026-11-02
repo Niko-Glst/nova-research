@@ -14,7 +14,8 @@ import argparse
 import json
 import sys
 import webbrowser
-from dataclasses import asdict, is_dataclass
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 
 from agents import report_archive, research_report, signal_snapshots
@@ -22,22 +23,32 @@ from config.settings import ROOT_DIR
 
 
 def _to_jsonable(value):
-    """Convert dataclasses and datetimes into JSON-serializable structures."""
+    """Convert dataclasses, mappings, arrays and datetimes into JSON-serializable structures.
+
+    Walks the fields rather than using dataclasses.asdict, which deep-copies and
+    fails on the read-only mappings the flow components carry.
+    """
     if is_dataclass(value) and not isinstance(value, type):
-        return {k: _to_jsonable(v) for k, v in asdict(value).items()}
-    if isinstance(value, dict):
-        return {k: _to_jsonable(v) for k, v in value.items()}
+        return {f.name: _to_jsonable(getattr(value, f.name)) for f in fields(value)}
+    if isinstance(value, Mapping):
+        return {str(k): _to_jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_to_jsonable(v) for v in value]
     if hasattr(value, "isoformat"):
         return value.isoformat()
+    if hasattr(value, "tolist"):  # numpy values and arrays, pandas Series
+        return _to_jsonable(value.tolist())
+    if hasattr(value, "to_dict"):  # pandas DataFrame
+        return _to_jsonable(value.to_dict(orient="list"))
+    if isinstance(value, float) and value != value:  # NaN is not valid JSON
+        return None
     return value
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="research.py",
-        description="Run technical, fundamental, sentiment and insider analysis on a ticker.",
+        description="Run the six analysts on a ticker, with risk, position size and a verdict.",
         epilog="Research output only -- not financial advice.",
     )
     parser.add_argument("symbols", nargs="+", help="Ticker symbol(s), e.g. AAPL MSFT")
@@ -129,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
                 webbrowser.open(path.resolve().as_uri())
 
     if args.json:
-        print(json.dumps([_to_jsonable(r) for r in reports], indent=2))
+        print(json.dumps([_to_jsonable(r) for r in reports], indent=2, default=str))
 
     return 1 if failed or not reports else 0
 

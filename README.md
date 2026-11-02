@@ -12,7 +12,7 @@ python serve.py              # web UI at localhost:8000
 python research.py NVDA --html --simulate    # or straight from the CLI
 ```
 
-<sub>Python 3.12 · ~21,500 lines · 760 tests · 10 runtime dependencies</sub>
+<sub>Python 3.12 · ~22,400 lines · 849 tests · 8 runtime dependencies</sub>
 
 ---
 
@@ -37,8 +37,33 @@ Each report also reads the S&P 500's last move against the move VIX implied
 drop beyond 2x says the market's assumptions may have changed. Shown, not
 scored; `history.py implied-move-study` holds the 1990–2026 evidence.
 
+Each report also lists the **past calls on this ticker**: every earlier verdict,
+settled from the first close after its run against the listing's own index
+(AEX for Amsterdam, CAC 40 for Paris, SPY for the US, 17 markets in all) over
+1 week, 1, 3 and 6 months. `history.py settle` gives the record across all
+tickers. Shown only: it never changes a score or a weight.
+
+Each report also runs a **risk gate and position size**: Sharpe, Sortino, drawdown
+and correlation against the local index and each peer, then the size three methods
+allow, at the report's score and at full conviction. No holdings are stored, so the
+index stands in for the book. Shown only.
+
+With `--simulate`, a **position-trading rule** runs next to the 50/200
+crossover: a pullback in an uptrend (after ThinkMarkets' position-trading
+guide) taken only when every condition holds: uptrend on the 50/200-day,
+price in the 50-61.8% Fibonacci retracement of the last weekly up-leg, support
+within 2%, a Bollinger lower-band touch with the close back inside, and a MACD
+or RSI momentum turn. Stops sit at weekly swing lows and
+trail upward. Weekly swings are used only once confirmed, so the backtest never
+sees a turning point before it was visible.
+
+Listings with no news under their ticker (most non-US ones) are searched by
+company name, keeping only headlines about the company; Reddit is searched by
+quoted name plus the ticker root when it is distinctive (`"BE Semiconductor
+Industries" OR BESI`).
+
 Every report and recorded run carries the scoring model's version
-(`config/scoring.yaml`, now 3.0.0), so runs under different rules are never
+(`config/scoring.yaml`, now 4.0.0), so runs under different rules are never
 compared as if they were the same.
 
 On top of that:
@@ -145,20 +170,18 @@ the symbols tested. That is recorded rather than tuned away.
   of numpy; the dependency bought little and cost portability.
 - **pandas-ta** is unmaintained and breaks on numpy 2.x. RSI, MACD, SMA and
   Donchian channels are computed directly in pandas.
-- **statsmodels / scipy** were not added for the regression work. OLS with
-  standard errors, t and F p-values is implemented in
+- **statsmodels / scipy** were not added for significance tests. The t-test is computed in
   [`backtests/regression.py`](backtests/regression.py) via the incomplete beta
-  function, and **verified against published statistical tables to four decimal
-  places** — not against a second implementation of my own, where a shared error
-  would look like agreement.
+  function, and checked against published tables.
 
 ---
 
 ## Validating the weights — and finding them unsupported
 
-The analyst weights (1.0 / 0.8 / 0.6 / 0.4) were chosen by argument. 
-[`backtests/signal_study.py`](backtests/signal_study.py) tests them by regressing
-each stance on realised returns.
+The first four analyst weights (1.0 / 0.8 / 0.6 / 0.4) were chosen by argument. A study
+regressed each stance on realised returns. It paired today's stances with past returns, so
+it was replaced by the point-in-time record (`history.py`, the track record) and removed;
+it stays in the git history.
 
 Across 24 symbols over a 63-day window:
 
@@ -198,19 +221,16 @@ Defined in [SECURITY.md](SECURITY.md) and enforced in code:
 
 | Rule | Enforcement |
 |---|---|
-| No live order execution | `get_broker_sandbox_credentials()` rejects any URL that does not look like a paper/sandbox endpoint, even with valid credentials |
-| No secrets in git | `.env` gitignored from commit 1; `detect-secrets` pre-commit hook plus a regex fallback hook |
+| No live order execution | There is no broker code: nothing in the project can reach one |
+| No secrets in git | `.env` gitignored from commit 1; a pre-commit hook blocks anything that looks like a key (`.git-hooks/pre-commit`) |
 | Allowlisted sources only | Every external fetch reads its permitted domains and subreddits from `config/allowed_sources.yaml`; an unlisted subreddit raises |
 | Rate limiting | Shared per-provider limiters in `common/rate_limit.py`, thread-safe, so two agents hitting one provider respect a single pace |
-
-The sandbox-URL guard has its own tests covering the live-endpoint cases, because
-that is the rule most costly to get wrong.
 
 ---
 
 ## Engineering notes
 
-**760 tests, ~7,200 lines of test code, none of them online.** Statistical functions are checked
+**849 tests, ~8,000 lines of test code, none of them online.** Statistical functions are checked
 against published tables; indicator maths against synthetic series with known
 properties. Several tests are explicit regressions for bugs that only appeared
 against live data:
@@ -241,7 +261,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 copy .env.example .env   # then fill in real values; .env is gitignored
-pre-commit install       # enables secret scanning
+git config core.hooksPath .git-hooks   # enables secret scanning
 ```
 
 All API keys are optional. The fundamental, technical and insider analysts need
@@ -286,13 +306,12 @@ python research.py TSLA --period 6mo --insider-days 90
 python research.py AAPL --no-peers           # skip peer comparison (much faster)
 python research.py AAPL --json > report.json
 
-python scripts/run_signal_study.py --csv reports/signal_study.csv
-
 python history.py rescore                    # recorded runs under the current model
 python history.py backfill                   # point-in-time flow inputs (needs pyarrow)
 python history.py backtest --from-sources    # flow score IC and quintile spreads
 python history.py breadth-backtest           # RSP/SPY regime against what followed
 python history.py implied-move-study         # S&P moves against VIX/16 since 1990
+python history.py settle                     # every recorded verdict vs its local index
 python scripts/migrate_snapshots_to_long.py  # one-time: CSV snapshots to parquet
 
 python correlation.py --universe cross_asset --html   # correlation report for a universe
@@ -321,6 +340,10 @@ agents/
   sec_edgar.py          SEC companyfacts client (cached, rate-limited)
   breadth_analyst.py    RSP/SPY regime and the stock's group
   implied_move.py       S&P 500 move against VIX/16 (shown, not scored)
+  position_strategy.py  position-trading rule: MA trend, Fibonacci, weekly support, momentum
+  benchmarks.py         each listing's local index, by ticker suffix
+  currency.py           minor units, spot conversion, amounts in the right symbol
+  track_record.py       recorded verdicts settled against the local index
   flow_evidence.py      flow and breadth readings as thesis/SWOT evidence lines
   research_report.py    orchestration and weighting
   signal_snapshots.py   one row per run, CSV or the parquet store
@@ -334,12 +357,12 @@ agents/
   strategy_agent.py     crossover, thesis-driven and Donchian breakout rules
   risk_manager.py       correlation to the book, Sharpe/Sortino, stated rejections
   allocation_decision.py  position sizing (simulation only)
+  risk_read.py          both of those in every report, against the local index
 backtests/
   backtest_engine.py    long-only vectorised simulation
   monte_carlo.py        block and iid bootstrap
   outcome_distribution.py  regime-split forward probabilities
-  regression.py         OLS with t and F tests, no scipy
-  signal_study.py       do the signals relate to returns at all?
+  regression.py         Pearson correlation with a t-test, no scipy
   market_data.py        cached OHLCV and earnings history
   signals.py, signal_weights.py, walk_forward.py   weights fitted and tested out of sample
 correlations/           correlation and covariance estimation, regimes, walk-forward
@@ -355,12 +378,6 @@ history.py              rescore, backfill and backtests of the scoring model
 correlation.py          correlation reports and the covariance API
 optimize.py             signal-weight fitting, walk-forward
 ```
-
-## Not yet implemented
-
-Three scaffold stages remain unbuilt: `investor_board` (archetype personas
-debating the inputs), `narrative_synth` and `podcast_summarizer`. They raise
-`NotImplementedError` rather than returning plausible-looking defaults.
 
 ---
 

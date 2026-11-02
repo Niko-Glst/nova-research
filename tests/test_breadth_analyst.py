@@ -253,3 +253,9 @@ class TestPresentation:
         assert float(row["breadth_ratio"]) == read.regime.ratio
         assert float(row["breadth_trend_slope"]) == read.regime.trend_slope
         assert rescore.breadth_stance(row) == read.signal
+
+
+def test_a_small_market_cap_is_not_rounded_to_a_billion():
+    """XFAB.PA, 2026-11-02: a 686M market cap read "$1B"."""
+    assert "market cap $686M" in ba._group_text(ba.NEUTRAL, "Technology", 685_817_600)
+    assert "market cap $12B" in ba._group_text(ba.NEUTRAL, "Technology", 12.1e9)

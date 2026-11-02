@@ -181,26 +181,3 @@ class TestValidation:
             num_simulations=500, seed=1,
         )
         assert any("long relative to" in c for c in distribution.caveats)
-
-
-class TestHistoricalDrawdowns:
-    def test_worst_drawdown_is_negative_after_a_fall(self):
-        prices = np.concatenate([np.linspace(100, 200, 100), np.linspace(200, 120, 60)])
-        frame = pd.DataFrame(
-            {"Close": prices}, index=pd.date_range("2023-01-01", periods=len(prices))
-        )
-        result = od.historical_drawdowns(frame)
-        assert result["worst_drawdown_pct"] < -35
-
-    def test_monotonic_rise_has_no_drawdown(self):
-        frame = _frame(np.full(200, 0.001))
-        result = od.historical_drawdowns(frame)
-        assert result["worst_drawdown_pct"] == pytest.approx(0.0)
-
-    def test_reports_time_spent_beyond_each_threshold(self):
-        prices = np.concatenate([np.linspace(100, 200, 100), np.linspace(200, 100, 100)])
-        frame = pd.DataFrame(
-            {"Close": prices}, index=pd.date_range("2023-01-01", periods=len(prices))
-        )
-        result = od.historical_drawdowns(frame)
-        assert 0.0 <= result["days_beyond_20pct"] <= 1.0

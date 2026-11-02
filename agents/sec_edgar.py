@@ -37,7 +37,7 @@ import time
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -226,7 +226,3 @@ def latest_annual_report(facts: dict, as_of: date | None = None) -> AnnualReport
     latest_year = max(r.fiscal_year_end for r in reports)
     # The original filing for the latest year (an amendment filed later is later news).
     return min((r for r in reports if r.fiscal_year_end == latest_year), key=lambda r: r.filed)
-
-
-def year_end_before(day: date, days: int) -> date:
-    return day - timedelta(days=days)

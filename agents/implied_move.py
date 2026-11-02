@@ -200,10 +200,6 @@ class MarketMove:
     base: BaseRates | None = None
 
     @property
-    def direction(self) -> str:
-        return "down" if self.move < 0 else "up" if self.move > 0 else "flat"
-
-    @property
     def assumptions_changed(self) -> bool:
         """The owner's rule: a drop beyond NOTABLE_MAX implied moves."""
         return self.multiple < -NOTABLE_MAX
@@ -249,7 +245,8 @@ class MarketMove:
             return None
         return (f"Since {b.first.year} ({b.sessions:,} sessions) the S&P fell beyond "
                 f"{NOISE_MAX:g}x its implied move on {b.down_beyond_noise:.1%} of sessions and "
-                f"beyond {NOTABLE_MAX:g}x on {b.down_beyond_notable:.1%}; after a drop beyond "
+                f"beyond {NOTABLE_MAX:g}x on {b.down_beyond_notable:.1%} ({b.beyond_drops:,} days), "
+                f"and rose beyond {NOTABLE_MAX:g}x on {b.up_beyond_notable:.1%}; after a drop beyond "
                 f"{NOTABLE_MAX:g}x another move beyond it followed within {FOLLOW_SESSIONS} "
                 f"sessions {b.follow_after_beyond_drop:.0%} of the time, against "
                 f"{b.follow_after_any:.0%} after any session. Actual moves averaged "

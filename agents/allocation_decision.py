@@ -28,8 +28,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-TRADING_DAYS = 252
-
 # The volatility each position is sized to contribute, annualized. 15% is a
 # conventional single-position target; the book's total is lower when positions
 # are not perfectly correlated.
@@ -73,23 +71,6 @@ class AllocationDecision:
     @property
     def is_actionable(self) -> bool:
         return self.position_size_pct >= MIN_POSITION_PCT
-
-    def summary(self) -> str:
-        lines = [
-            f"Allocation: {self.symbol}",
-            f"  method:            {self.method}",
-            f"  position size:     {self.position_size_pct:.2f}% of equity",
-            f"  position value:    ${self.position_value:,.0f}",
-            f"  unconstrained:     {self.unconstrained_size_pct:.2f}%",
-            f"  transaction cost:  ${self.estimated_transaction_cost:,.2f} "
-            f"({self.cost_as_pct_of_position:.3f}% of position)",
-            f"  vol contribution:  {self.expected_volatility_contribution_pct:.2f}%",
-            f"  rationale:         {self.rationale}",
-        ]
-        if self.constraints_applied:
-            lines.append("  constraints:")
-            lines += [f"    - {c}" for c in self.constraints_applied]
-        return "\n".join(lines)
 
 
 def _fixed_fractional_size(conviction: float, base_pct: float = 10.0) -> float:

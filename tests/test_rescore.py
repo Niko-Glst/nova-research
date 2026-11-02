@@ -60,26 +60,28 @@ def live_report(monkeypatch):
     monkeypatch.setattr(implied_move, "analyze", lambda *a, **k: implied_move.MarketMove(
         session=datetime(2026, 10, 23).date(), move=-0.0052, vol_prev=19.03, implied=0.012,
         multiple=-0.43, tier=implied_move.NOISE))
+    monkeypatch.setattr(research_report.track_record, "for_symbol", lambda *a, **k: [])
+    monkeypatch.setattr(research_report.risk_read, "analyze", lambda *a, **k: None)
     return research_report.analyze("TEST")
 
 
 class TestModelVersion:
     def test_every_report_carries_the_configured_version(self, live_report):
-        assert live_report.model_version == research_report.MODEL_VERSION == "3.0.0"
-        assert "Model:      3.0.0" in research_report.format_report(live_report)
+        assert live_report.model_version == research_report.MODEL_VERSION == "4.0.0"
+        assert "Model:      4.0.0" in research_report.format_report(live_report)
         row = signal_snapshots.snapshot_row(live_report, NOW)
-        assert row["model_version"] == "3.0.0"
+        assert row["model_version"] == "4.0.0"
 
     def test_leg_weights_come_from_config_unchanged(self):
         assert research_report.WEIGHTS == {"fundamental": 1.0, "technical": 0.8, "insider": 0.6,
                                            "sentiment": 0.4, "flows": 0.4, "breadth": 0.5}
 
-    def test_a_2_0_0_run_rescores_under_3_0_0(self, live_report):
+    def test_a_2_0_0_run_rescores_under_the_current_model(self, live_report):
         """2.0.0 rows stored every input, so the new weight and rules apply to them."""
         row = {**signal_snapshots.snapshot_row(live_report, NOW), "model_version": "2.0.0"}
         result = rescore.rescore_row(row)
         assert result.rescored and result.original_model == "2.0.0"
-        assert result.model_version == "3.0.0"
+        assert result.model_version == research_report.MODEL_VERSION
 
 
 class TestWeightedFlows:

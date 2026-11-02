@@ -58,7 +58,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from types import MappingProxyType
 
@@ -66,7 +66,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from agents import sec_edgar, volatility as vol
+from agents import currency, sec_edgar, volatility as vol
 from agents.risk_manager import TRADING_DAYS
 from agents.ta_analyst import fetch_price_history
 from common.rate_limit import get_limiter
@@ -160,6 +160,7 @@ class FlowRead:
     insiders_pct: float | None = None
     market_symbol: str = MARKET_PROXY
     notes: str = ""
+    report_currency: str = "USD"  # currency of the quarterly buyback amounts
 
     def component(self, name: str) -> FlowComponent | None:
         return next((c for c in self.components if c.name == name), None)
@@ -327,7 +328,15 @@ def stock_volatility_component(
         "bad_row_share": reading.bad_row_share,
     })
     score = stock_score(reading.z, ratio, scoring)
-    if ratio <= STOCK_SETTLING_RATIO:
+    if scoring == "continuous" and math.isfinite(reading.z):
+        # Worded from z, as it is scored; the ratio bands below belong to the
+        # discrete rule (a 0.83 ratio at z -2.5 is a clear fall, scored +1).
+        size = f"{abs(reading.z):.1f} standard errors"
+        reading_text = ("below its norm by " + size + ", so volatility-based sizing can hold "
+                        "more of it" if reading.z < 0 else
+                        "above its norm by " + size + ", so volatility-based sizing holds "
+                        "less of it" if reading.z > 0 else "at its norm")
+    elif ratio <= STOCK_SETTLING_RATIO:
         reading_text = "settling, so volatility-based sizing can hold more of it"
     elif ratio >= STOCK_RISING_RATIO:
         reading_text = "rising, so volatility-based sizing holds less of it"
@@ -365,9 +374,10 @@ class IssuanceInputs:
     year_end: date | None
     source: str  # where the share counts came from
     buyback_flag: str  # REPORTED / ASSUMED_ZERO / CONFIRMED_ZERO / UNKNOWN
-    repurchased: float | None = None  # dollars over the year
+    repurchased: float | None = None  # over the year, in `currency`
     issued: float | None = None
     note: str = ""
+    currency: str = "USD"  # the statements' currency
 
 
 def issuance_component(inputs: IssuanceInputs, market_cap: float | None = None) -> FlowComponent:
@@ -392,18 +402,21 @@ def issuance_component(inputs: IssuanceInputs, market_cap: float | None = None) 
             f"Shares fell {-ni:.1%} over the year to {year} ({inputs.source}), but "
             f"{_FLAG_TEXT[inputs.buyback_flag]}. The two disagree, so this part is left out."),
             MappingProxyType(values), DATA_CONFLICT)
-    score = issuance_score(ni)
+    score = issuance_score(ni) + 0.0  # never -0.0
     if ni > 0:
         direction = (f"shares grew: issuance adds supply (issuance side, weight "
                      f"{ISSUANCE_SIDE_WEIGHT:g})")
+    elif ni == 0:
+        direction = "share count unchanged: no net supply or demand"
     else:
         direction = (f"shares shrank: repurchases add demand (buyback side, weight "
                      f"{BUYBACK_SIDE_WEIGHT:g})")
     amounts = []
+    sign = currency.prefix(inputs.currency)
     if inputs.repurchased is not None:
-        amounts.append(f"${inputs.repurchased / 1e6:,.0f}M bought back")
+        amounts.append(f"{sign}{inputs.repurchased / 1e6:,.0f}M bought back")
     if inputs.issued is not None:
-        amounts.append(f"${inputs.issued / 1e6:,.0f}M raised from new shares")
+        amounts.append(f"{sign}{inputs.issued / 1e6:,.0f}M raised from new shares")
     return FlowComponent("issuance", label, float(score), (
         f"Net issuance {ni:+.1%} over the year to {year} ({inputs.source}): {direction}. "
         + (f"{', '.join(amounts)}. " if amounts else "")
@@ -498,8 +511,8 @@ def quarterly_buybacks(
     for col in columns[:QUARTERS_SHOWN]:
         end = pd.Timestamp(col)
         rep, iss = cell(REPURCHASE_ROW, col), cell(ISSUANCE_ROW, col)
-        if pd.isna(rep) or pd.isna(iss):
-            continue
+        if pd.isna(rep) and pd.isna(iss):
+            continue  # a blank quarter; one blank line still shows the other (as n/a)
         price_return = None
         if prices is not None:
             start = end - pd.DateOffset(months=3)
@@ -507,7 +520,8 @@ def quarterly_buybacks(
             if len(before) and len(after) and before.index[-1] < after.index[-1] \
                     and (start - before.index[-1]).days <= QUARTER_PRICE_GAP_DAYS:
                 price_return = float(after.iloc[-1] / before.iloc[-1] - 1.0)
-        quarters.append(QuarterBuyback(end.date(), float(-rep) + 0.0, float(iss), price_return))
+        quarters.append(QuarterBuyback(end.date(), float(-rep) + 0.0 if not pd.isna(rep)
+                                       else float("nan"), float(iss), price_return))
     return tuple(quarters)
 
 
@@ -633,12 +647,17 @@ def _issuance(symbol: str, ticker, info: dict, close, today: date,
             _wait()
             cashflow = ticker.cashflow
             _wait()
-            inputs = yfinance_issuance_inputs(balance_sheet, cashflow, ticker.splits)
+            inputs = replace(yfinance_issuance_inputs(balance_sheet, cashflow, ticker.splits),
+                             currency=currency.report_currency(info))
     except Exception as exc:
         if inputs is None:
             inputs = IssuanceInputs(None, None, f"statements unavailable ({type(exc).__name__})",
                                     UNKNOWN)
-    return issuance_component(inputs, info.get("marketCap")), quarters
+    # Buybacks are in the statements' currency, so the market cap must be too.
+    cap = info.get("marketCap")
+    cap = currency.convert(float(cap), currency.quote_currency(info), inputs.currency) if cap \
+        else None
+    return issuance_component(inputs, cap), quarters
 
 
 def analyze(symbol: str, today: date | None = None) -> FlowRead:
@@ -726,4 +745,5 @@ def analyze(symbol: str, today: date | None = None) -> FlowRead:
         institutions_pct=float(institutions) if institutions is not None else None,
         insiders_pct=float(insiders) if insiders is not None else None,
         notes=" ".join(notes),
+        report_currency=currency.report_currency(info),
     )

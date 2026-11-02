@@ -33,8 +33,6 @@ pyarrow>=14.0
 
 # Dev / quality
 pytest>=7.0
-pre-commit>=3.0
-detect-secrets>=1.4
 
 # NOTE: Playwright is intentionally NOT listed here. Browser automation runs
 # via the separate Playwright MCP server, not as a Python dependency of this repo.

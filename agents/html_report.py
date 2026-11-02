@@ -15,7 +15,7 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass
 
-from agents import breadth_analyst, implied_move
+from agents import breadth_analyst, currency, implied_move, position_strategy, track_record
 from agents.charts import (
     breadth_ratio_chart,
     implied_move_chart,
@@ -26,7 +26,7 @@ from agents.charts import (
     peer_metric_chart,
     probability_ladder_chart,
 )
-from agents.research_report import WEIGHTS, ResearchReport
+from agents.research_report import WEIGHTS, ResearchReport, market_cap_text
 
 # Metric display names, so the page does not show raw snake_case keys.
 _METRIC_LABELS = {
@@ -412,17 +412,13 @@ def _fundamentals_section(report: ResearchReport) -> str:
             f'<span class="stat-value">{fmt.format(value)}</span></div>'
         )
 
-    market_cap = metrics.get("market_cap")
-    if market_cap:
-        for threshold, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
-            if market_cap >= threshold:
-                cells.insert(
-                    0,
-                    f'<div class="stat"><span class="stat-label">Market cap</span>'
-                    f'<span class="stat-value">${market_cap / threshold:,.2f}{suffix}'
-                    f"</span></div>",
-                )
-                break
+    if metrics.get("market_cap"):
+        cells.insert(
+            0,
+            f'<div class="stat"><span class="stat-label">Market cap</span>'
+            f'<span class="stat-value">'
+            f"{_esc(market_cap_text(metrics, fundamental.quote_currency))}</span></div>",
+        )
 
     reasons = "".join(f"<li>{_esc(r)}</li>" for r in fundamental.reasons)
     tone = _tone(_SIGNAL_TONE, fundamental.signal)
@@ -470,9 +466,13 @@ def _flows_section(report: ResearchReport) -> str:
     )
     quarters = ""
     if flows.quarters:
+        def millions(value: float) -> str:
+            sign = currency.prefix(flows.report_currency)
+            return "n/a" if value != value else f"{sign}{value / 1e6:,.0f}M"
+
         rows = "".join(
-            f"<tr><td>{_esc(q.quarter_end)}</td><td class=\"num\">${q.repurchased / 1e6:,.0f}M</td>"
-            f"<td class=\"num\">${q.issued / 1e6:,.0f}M</td><td class=\"num\">"
+            f"<tr><td>{_esc(q.quarter_end)}</td><td class=\"num\">{millions(q.repurchased)}</td>"
+            f"<td class=\"num\">{millions(q.issued)}</td><td class=\"num\">"
             f"{'' if q.price_return is None else f'{q.price_return:+.1%}'}</td></tr>"
             for q in flows.quarters
         )
@@ -609,6 +609,41 @@ def _market_move_section(report: ResearchReport) -> str:
     </section>"""
 
 
+def _past_calls_section(report: ResearchReport) -> str:
+    calls = report.past_calls
+    if calls is None:
+        return ""
+    if not calls:
+        body = '<p class="muted-text">No earlier run of this ticker is recorded yet.</p>'
+    else:
+        heads = "".join(f'<th>{_esc(label)}</th>' for label in track_record.HORIZONS)
+        rows = []
+        for call in reversed(calls):
+            score = "" if call.score != call.score else f" {call.score:+.2f}"
+            cells = "".join(
+                f'<td>{_esc(track_record.outcome_text(call, o, track_record.HTML_MARKS))}</td>'
+                for o in call.outcomes)
+            entry = (f"{call.entry_date} at {call.entry_price:,.2f}" if call.entry_date
+                     else call.note)
+            rows.append(f"<tr><td>{_esc(call.recorded_at[:10])}</td>"
+                        f"<td>{_esc(call.model_version)}</td>"
+                        f"<td>{_esc(call.verdict)}{_esc(score)}</td><td>{_esc(entry)}</td>"
+                        f"{cells}</tr>")
+        body = (f"<table><thead><tr><th>Run</th><th>Model</th><th>Verdict</th><th>Entry</th>"
+                f"{heads}</tr></thead><tbody>{''.join(rows)}</tbody></table>")
+    benchmark = calls[0].benchmark if calls else None
+    return f"""
+    <section class="card">
+      <h2>Past calls on this ticker</h2>
+      <p class="muted-text">Earlier verdicts, settled from the first close after each run against
+      {_esc(benchmark or "the local index")}: the stock's return minus the index's over 1 week,
+      1, 3 and 6 months. A positive call is right (&#10003;) when the stock beat its index, a
+      negative one when it trailed; mixed takes no side. {_esc(track_record.DIVIDEND_NOTE)}
+      Shown only, never scored.</p>
+      {body}
+    </section>"""
+
+
 def _insider_section(report: ResearchReport) -> str:
     insider = report.insider
     if insider is None:
@@ -627,14 +662,30 @@ def _insider_section(report: ResearchReport) -> str:
             f'<span class="stat-value">${insider.net_value:,.0f}</span></div>',
             f'<div class="stat"><span class="stat-label">Window</span>'
             f'<span class="stat-value">{insider.lookback_days}d</span></div>',
+            f'<div class="stat"><span class="stat-label">Senior buys / sells</span>'
+            f'<span class="stat-value">{insider.senior_buy_count} / '
+            f'{insider.senior_sell_count}</span></div>',
         ]
     )
+
+    rows = "".join(
+        f"<tr><td>{t.date.strftime('%d %b %Y') if t.date else '&ndash;'}</td>"
+        f"<td>{_esc(t.insider)}</td><td>{_esc(t.position)}</td><td>{_esc(t.category.removeprefix('open_market_'))}</td>"
+        f"<td class='num'>{t.shares:,.0f}</td><td class='num'>${t.value:,.0f}</td></tr>"
+        for t in insider.open_market_trades
+    )
+    trades = (
+        "<h3>Open-market trades</h3><table><thead><tr><th>Date</th><th>Insider</th>"
+        "<th>Position</th><th>Side</th><th class='num'>Shares</th><th class='num'>Value</th>"
+        f"</tr></thead><tbody>{rows}</tbody></table>"
+    ) if rows else ""
 
     return f"""
     <section class="card">
       <h2>Insider activity <span class="pill {tone}">{_esc(insider.signal.upper())}</span></h2>
       <div class="stats">{stats}</div>
       <ul class="reasons">{reasons}</ul>
+      {trades}
     </section>"""
 
 
@@ -856,6 +907,10 @@ def _simulation_section(report: ResearchReport) -> str:
                 ("P(loss)", f"{simulation.probability_of_loss:.0%}"),
                 ("P(DD &gt; 20%)", f"{simulation.probability_of_drawdown_20pct:.0%}"),
                 ("CVaR 5%", f"{simulation.conditional_var_5pct:.1f}%"),
+                ("Median drawdown",
+                 f"{simulation.max_drawdown_percentiles.get('p50', 0):.1f}%"),
+                ("Bad-case drawdown (p5)",
+                 f"{simulation.max_drawdown_percentiles.get('p5', 0):.1f}%"),
             ]
         )
 
@@ -881,11 +936,216 @@ def _simulation_section(report: ResearchReport) -> str:
       <h2>Backtest <span class="pill {verdict_tone}">{verdict_text}</span></h2>
       <p class="muted-text">50/200-day {_term("moving average", "moving-average")}
          crossover. Costs: 10 {_term("basis point", "basis points")} per side.
-         Signals are lagged one bar, so each is traded on the open after the close
-         that produced it. Long-only, single position, no leverage.</p>
+         Each signal is traded at the close that produced it and earns only the
+         moves after it, never the one that triggered it. Long-only, single
+         position, no leverage.</p>
       <div class="stats">{stats}</div>
       {equity_block}
       {mc_block}
+    </section>"""
+
+
+def _stat_cells(pairs) -> str:
+    return "".join(f'<div class="stat"><span class="stat-label">{label}</span>'
+                   f'<span class="stat-value">{value}</span></div>' for label, value in pairs)
+
+
+def _rules_section(report: ResearchReport) -> str:
+    """Every backtested rule side by side, on the same history and costs."""
+    if report.backtest is None:
+        return ""
+    rules = [("50/200 crossover", "Long while the 50-day average is above the 200-day average.",
+              report.backtest)]
+    if report.position_backtest is not None:
+        pb = report.position_backtest
+        rules.append(("Position-trading rule", "A pullback in an uptrend; see its section.",
+                      pb.backtest))
+    rules += report.other_rules
+    rows = "".join(
+        f"<tr><td><strong>{_esc(name)}</strong><br><span class='muted-text'>{_esc(why)}</span></td>"
+        f"<td class='num {'good' if r.beats_buy_and_hold else 'bad'}'>"
+        f"{r.total_return_pct:+.1f}%</td><td class='num'>{r.annualized_return_pct:+.1f}%</td>"
+        f"<td class='num'>{r.max_drawdown_pct:.1f}%</td><td class='num'>{r.sharpe_ratio:.2f}</td>"
+        f"<td class='num'>{r.num_trades}</td><td class='num'>{r.win_rate_pct:.0f}%</td></tr>"
+        for name, why, r in rules)
+    return f"""
+    <section class="card">
+      <h2>Every rule compared</h2>
+      <p class="muted-text">The same history and costs for each rule, against buy &amp; hold at
+      {report.backtest.buy_and_hold_return_pct:+.1f}%. Green beat it, red did not. Several rules
+      on one history: the best of them is partly luck, so read this as a comparison.</p>
+      <table><thead><tr><th>Rule</th><th class="num">Return</th><th class="num">Annualized</th>
+      <th class="num">Max drawdown</th><th class="num">Sharpe</th><th class="num">Trades</th>
+      <th class="num">Win rate</th></tr></thead><tbody>{rows}</tbody></table>
+    </section>"""
+
+
+def _risk_section(report: ResearchReport) -> str:
+    """The risk gate and the position size, against the local index."""
+    risk = report.risk
+    if risk is None:
+        return ""
+    a = risk.assessment
+    tone, verdict = ("good", "passes the gate") if a.approved else ("bad", "fails the gate")
+    correlation = a.correlation_to_portfolio
+    stats = _stat_cells([
+        (f"Correlation to {_esc(risk.benchmark)}",
+         "&ndash;" if correlation != correlation else f"{correlation:+.2f}"),
+        ("Diversification benefit", f"{a.diversification_benefit:.2f}"),
+        ("Sharpe", f"{a.sharpe_ratio:.2f}"),
+        ("Sortino", f"{a.sortino_ratio:.2f}"),
+        ("Annualized return", f"{a.annualized_return_pct:+.1f}%"),
+        ("Volatility", f"{a.annualized_volatility_pct:.1f}%"),
+        ("Max drawdown", f"{a.max_drawdown_pct:.1f}%"),
+        ("Days", f"{a.observations:,}"),
+    ])
+    notes = "".join(f"<li>{_esc(w)}</li>" for w in (a.reason, *a.warnings))
+
+    def cell(decision) -> str:
+        if not decision.is_actionable:
+            return "<td class='num'>no position</td>"
+        return f"<td class='num'>{decision.position_size_pct:.2f}%</td>"
+
+    def basis(decision) -> str:
+        return _esc(" ".join([decision.rationale, *decision.constraints_applied]))
+
+    rows = "".join(
+        f"<tr><td>{_esc(s.method.replace('_', ' '))}</td>{cell(s.at_score)}"
+        f"{cell(s.at_full_conviction)}<td>{basis(s.at_full_conviction)}</td></tr>"
+        for s in risk.sizes)
+    peers = ""
+    if risk.peers or risk.peers_unavailable:
+        cells = "".join(f"<tr><td>{_esc(p.peer)}</td><td class='num'>{p.correlation:+.2f}</td>"
+                        f"<td class='num'>{p.observations:,}</td></tr>" for p in risk.peers)
+        missing = (f'<p class="muted-text">No price history for '
+                   f'{_esc(", ".join(risk.peers_unavailable))}.</p>'
+                   if risk.peers_unavailable else "")
+        peers = (f'<h3>Correlation with peers</h3><table><thead><tr><th>Peer</th>'
+                 f'<th class="num">Correlation</th><th class="num">Days</th></tr></thead>'
+                 f"<tbody>{cells}</tbody></table>{missing}")
+    return f"""
+    <section class="card">
+      <h2>Risk and position size <span class="pill {tone}">{verdict}</span></h2>
+      <p class="muted-text">Daily returns since {_esc(risk.start)}. No holdings are stored, so
+      {_esc(risk.benchmark)} stands in for the book. Conviction is the score when positive, here
+      {risk.conviction:.0%}. Sizes are percentages of equity, before any view of your own
+      holdings. Shown here, never scored.</p>
+      <div class="stats">{stats}</div>
+      <ul class="reasons">{notes}</ul>
+      <h3>Position size</h3>
+      <table><thead><tr><th>Method</th><th class="num">At this score</th>
+      <th class="num">At full conviction</th><th>Basis</th></tr></thead>
+      <tbody>{rows}</tbody></table>
+      {peers}
+    </section>"""
+
+
+def _position_section(report: ResearchReport) -> str:
+    """The position-trading rule: today's conditions and levels, its backtest and trades."""
+    pb = report.position_backtest
+    if pb is None:
+        return ""
+    ps = position_strategy
+    bt = pb.backtest
+    tone = "good" if bt.beats_buy_and_hold else "bad"
+    verdict = "beats buy &amp; hold" if bt.beats_buy_and_hold else "trails buy &amp; hold"
+    if not bt.num_trades:
+        tone, verdict = "muted", "no trades"
+    lv = pb.levels
+    checks = ""
+    level_rows = ""
+    if lv is not None:
+        checks = "".join(
+            f'<li class="condition {"good" if ok else "muted"}"><span class="mark">'
+            f'{"&#10003;" if ok else "&ndash;"}</span><span>{_esc(ps.CONDITION_TEXT[name])}'
+            f'</span></li>' for name, ok in lv.conditions_now.items())
+        rows = [(f"{n}-day average", f"{v:,.2f}") for n, v in lv.moving_averages.items()]
+        lo, mid, up = lv.bollinger
+        rows.append((f"Bollinger {ps.BOLLINGER_DAYS}/{ps.BOLLINGER_SD:g} (lower / middle / upper)",
+                     f"{lo:,.2f} / {mid:,.2f} / {up:,.2f}, %B {lv.percent_b:.2f}"))
+        if lv.leg is not None:
+            rows.append(("Last up-leg (weekly swings)",
+                         f"{lv.leg.low:,.2f} ({lv.leg.low_week:%d %b %Y}) to {lv.leg.high:,.2f} "
+                         f"({lv.leg.high_week:%d %b %Y}); now {lv.retracement:.0%} retraced"))
+            rows += [(f"Fibonacci {label}", f"{value:,.2f}")
+                     for label, value in lv.fib_levels().items()]
+        rows.append(("Nearest support", "&ndash;" if lv.support is None else f"{lv.support:,.2f}"))
+        rows.append(("Nearest resistance (weekly)",
+                     "&ndash;" if lv.resistance is None else f"{lv.resistance:,.2f}"))
+        if pb.stop_in_force is not None:
+            rows.append(("Open trade: stop in force", f"{pb.stop_in_force:,.2f}"))
+        level_rows = "".join(f"<tr><td>{_esc(k)}</td><td class='num'>{v}</td></tr>"
+                             for k, v in rows)
+    crossover = report.backtest
+    stats = _stat_cells([
+        ("This rule", f"{bt.total_return_pct:+.1f}%"),
+        ("50/200 crossover", "&ndash;" if crossover is None
+         else f"{crossover.total_return_pct:+.1f}%"),
+        ("Buy &amp; hold", f"{bt.buy_and_hold_return_pct:+.1f}%"),
+        ("Max drawdown", f"{bt.max_drawdown_pct:.1f}%"),
+        ("Trades", f"{bt.num_trades}"),
+        ("Win rate", f"{bt.win_rate_pct:.0f}%"),
+        ("In market", f"{bt.time_in_market_pct:.0f}%"),
+        ("Sharpe", f"{bt.sharpe_ratio:.2f}"),
+    ])
+    days = pb.signals.condition_days()
+    held = "".join(
+        f"<tr><td>{_esc(ps.CONDITION_TEXT[name])}</td><td class='num'>{days[name]:,}</td>"
+        f"<td class='num'>{days[name] / days['days']:.0%}</td></tr>"
+        for name in ps.CONDITIONS) if days["days"] else ""
+    index = bt.equity_curve.index if bt.equity_curve is not None else None
+    trade_rows = []
+    for k, t in enumerate(bt.trades if index is not None else []):
+        still_open = k == len(bt.trades) - 1 and pb.signals.open_at_end
+        exit_cell = (f"open (marked {index[t.exit_index]:%d %b})" if still_open
+                     else f"{index[t.exit_index]:%d %b %Y}")
+        trade_rows.append(
+            f"<tr><td>{index[t.entry_index]:%d %b %Y}</td><td>{exit_cell}</td>"
+            f"<td class='num'>{t.entry_price:,.2f}</td><td class='num'>{t.exit_price:,.2f}</td>"
+            f"<td class='num {'good' if t.return_pct > 0 else 'bad'}'>{t.return_pct:+.1f}%</td>"
+            f"<td class='num'>{t.bars_held}</td></tr>")
+    trades = "".join(trade_rows)
+    equity = ""
+    if bt.equity_curve is not None and report.buy_hold_equity is not None and bt.num_trades:
+        equity = ("<h3>This rule versus buy &amp; hold</h3>"
+                  + equity_curve_chart(bt.equity_curve.to_numpy(), report.buy_hold_equity))
+    mc = ""
+    sim = pb.monte_carlo
+    if sim is not None and pb.simulated_returns is not None:
+        mc = (f"<h3>Monte Carlo: {sim.num_simulations:,} resampled paths, one year</h3>"
+              + '<div class="stats">' + _stat_cells([
+                  ("Median (p50)", f"{sim.return_percentiles.get('p50', 0):+.1f}%"),
+                  ("p5", f"{sim.return_percentiles.get('p5', 0):+.1f}%"),
+                  ("p95", f"{sim.return_percentiles.get('p95', 0):+.1f}%"),
+                  ("P(loss)", f"{sim.probability_of_loss:.0%}"),
+                  ("P(DD &gt; 20%)", f"{sim.probability_of_drawdown_20pct:.0%}"),
+              ]) + "</div>"
+              + monte_carlo_histogram(pb.simulated_returns, observed=sim.observed_return_pct,
+                                      percentiles=sim.return_percentiles))
+    return f"""
+    <section class="card">
+      <h2>Position-trading rule <span class="pill {tone}">{verdict}</span></h2>
+      <p class="muted-text">A pullback in an uptrend, after ThinkMarkets' position-trading
+      guide: every condition must hold before a trade is taken. {_esc(pb.signals.signals.rationale)}
+      Weekly swings count only once the weeks confirming them have closed; each signal is
+      traded at the close that produced it and earns only the moves after it;
+      {ps.FEES_BPS:g} basis points per side. Fundamentals, central
+      to the guide, have no point-in-time history and are not in the rule.</p>
+      <h3>Conditions today</h3>
+      <ul class="conditions">{checks}</ul>
+      <table><tbody>{level_rows}</tbody></table>
+      <h3>Backtest</h3>
+      <div class="stats">{stats}</div>
+      {equity}
+      <h3>How often each condition held</h3>
+      <table><thead><tr><th>Condition</th><th class="num">Days</th><th class="num">Share
+      </th></tr></thead><tbody>{held}</tbody></table>
+      <h3>Trades</h3>
+      <table><thead><tr><th>Entry</th><th>Exit</th><th class="num">In</th><th class="num">Out
+      </th><th class="num">Return</th><th class="num">Days</th></tr></thead>
+      <tbody>{trades or '<tr><td colspan="6">No trade: the conditions never all held.</td></tr>'}
+      </tbody></table>
+      {mc}
     </section>"""
 
 
@@ -917,7 +1177,7 @@ def _outcome_section(report: ResearchReport) -> str:
             f'<div class="stat"><span class="stat-label">P(any gain)</span>'
             f'<span class="stat-value">'
             f'{current.probability_of_return_above[0.0]:.0%}</span></div>'
-            f'<div class="stat"><span class="stat-label">P(down 20%+)</span>'
+            f'<div class="stat"><span class="stat-label">P(20%+ drawdown on the way)</span>'
             f'<span class="stat-value">'
             f'{current.probability_of_drawdown_beyond[20.0]:.0%}</span></div>'
             f'<div class="stat"><span class="stat-label">Worst-5% mean</span>'
@@ -1191,11 +1451,15 @@ def render_report(report: ResearchReport, generated_at: str = "") -> str:
 </section>
 
 {_thesis_section(report)}
+{_past_calls_section(report)}
 {_swot_section(report)}
 {_peer_section(report)}
 {_eps_peer_section(report)}
 {_outcome_section(report)}
 {_simulation_section(report)}
+{_position_section(report)}
+{_rules_section(report)}
+{_risk_section(report)}
 {_fundamentals_section(report)}
 {_technical_section(report)}
 {_insider_section(report)}

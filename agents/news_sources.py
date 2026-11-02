@@ -17,6 +17,9 @@ Providers, in the order they are tried:
 - yfinance -- no credentials, but returns only the newest ten headlines. Enough
   for a sentiment read, not enough to measure coverage volume (see
   TRUNCATED_FEED_PROVIDERS below).
+- yfinance search by company name -- the last resort, for listings with no news
+  under their ticker (non-US ones mostly). Only headlines Yahoo tags with the
+  ticker, or that name the company, are kept. Also truncated.
 
 Sources are still filtered against the allowlist in config/allowed_sources.yaml
 (SECURITY.md rule 3).
@@ -25,6 +28,7 @@ Sources are still filtered against the allowlist in config/allowed_sources.yaml
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -47,7 +51,7 @@ TIINGO_DEFAULT_LIMIT = 100
 # for a historical window. Coverage volume cannot be measured from these: the
 # feed is truncated by construction, so *every* symbol looks like a burst with
 # no baseline behind it. See news_signal.analyze_volume.
-TRUNCATED_FEED_PROVIDERS = frozenset({"yfinance"})
+TRUNCATED_FEED_PROVIDERS = frozenset({"yfinance", "yfinance_search"})
 
 
 @dataclass(frozen=True)
@@ -359,14 +363,89 @@ def fetch_yfinance_news(symbol: str, allowed_domains: list[str]) -> list[NewsIte
     return items
 
 
+def _about_the_company(title: str, related: list[str], symbol: str,
+                       name_terms: list[str]) -> bool:
+    """Whether a search hit is about this company, not merely near it.
+
+    Yahoo tags each article with the tickers it is about; a headline naming the
+    company counts too. General market pieces the search also returns ("European
+    shares mostly higher") are left out.
+    """
+    if symbol.upper() in {str(t).upper() for t in related}:
+        return True
+    return any(re.search(rf"\b{re.escape(term)}\b", title, re.IGNORECASE)
+               for term in name_terms if term)
+
+
+def name_terms(symbol: str, company_name: str) -> list[str]:
+    """Ways a headline names the company: full name, its first two words, ticker root."""
+    words = company_name.split()
+    terms = [company_name.strip()]
+    if len(words) >= 3:
+        terms.append(" ".join(words[:2]))  # "BE Semiconductor" for "BE Semiconductor Industries"
+    root = ticker_root(symbol)
+    if root:
+        terms.append(root)  # "BESI"; a short root like "SU" would match too much
+    return terms
+
+
+def ticker_root(symbol: str) -> str:
+    """'BESI' for BESI.AS; '' when the root is too short or not all letters to search on.
+
+    The minimum length is config/scoring.yaml name_search.reddit_root_min_length.
+    """
+    from config.settings import load_scoring_config
+
+    minimum = int(load_scoring_config()["name_search"]["reddit_root_min_length"])
+    root = symbol.strip().upper().split(".")[0]
+    return root if root.isalpha() and len(root) >= minimum else ""
+
+
+def fetch_yfinance_search_news(symbol: str, company_name: str,
+                               allowed_domains: list[str]) -> list[NewsItem]:
+    """Yahoo news search by company name, kept to articles about the company."""
+    import yfinance as yf
+
+    from config.settings import load_scoring_config
+
+    count = int(load_scoring_config()["name_search"]["news_count"])
+    get_limiter("yfinance").wait()
+    try:
+        articles = yf.Search(company_name, news_count=count, max_results=1).news or []
+    except Exception:
+        return []
+    terms = name_terms(symbol, company_name)
+    items: list[NewsItem] = []
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+        title, url = str(article.get("title") or ""), str(article.get("link") or "")
+        publisher = str(article.get("publisher") or "")
+        if not _matches_allowlist(f"{url} {publisher}", allowed_domains):
+            continue
+        if not _about_the_company(title, list(article.get("relatedTickers") or []), symbol,
+                                  terms):
+            continue
+        epoch = article.get("providerPublishTime")
+        published = (datetime.fromtimestamp(epoch, tz=timezone.utc)
+                     if isinstance(epoch, (int, float)) else None)
+        items.append(NewsItem(title=title, body="", published=published, source=publisher,
+                              url=url, provider="yfinance_search"))
+    return items
+
+
 def fetch_news(
-    symbol: str, allowed_domains: list[str], lookback_days: int = 30
+    symbol: str, allowed_domains: list[str], lookback_days: int = 30, company_name: str = ""
 ) -> tuple[list[NewsItem], list[str]]:
     """Fetch news from the best available provider.
 
     Returns (items, unavailable) where `unavailable` describes each provider
     that could not be used, so the caller can report why a source is missing
     rather than silently returning less data.
+
+    When every ticker-based source comes back empty and a company name is known,
+    Yahoo's news search is tried by name (owner 2026-10-28): a non-US listing
+    such as BESI.AS has no news under its ticker but plenty under its name.
     """
     unavailable: list[str] = []
 
@@ -385,6 +464,12 @@ def fetch_news(
         unavailable.append(f"{name} (no articles matched the allowlist)")
 
     items = fetch_yfinance_news(symbol, allowed_domains)
-    if not items:
-        unavailable.append("yfinance (no headlines matched the allowlist)")
+    if items:
+        return items, unavailable
+    unavailable.append("yfinance (no headlines matched the allowlist)")
+    if company_name.strip():
+        items = fetch_yfinance_search_news(symbol, company_name.strip(), allowed_domains)
+        if not items:
+            unavailable.append(f'yfinance search for "{company_name.strip()}" (no allowlisted '
+                               f"headlines about the company)")
     return items, unavailable

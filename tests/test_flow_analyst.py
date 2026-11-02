@@ -202,6 +202,23 @@ class TestIssuance:
         expected = close.loc[:end].iloc[-1] / close.loc[:start].iloc[-1] - 1
         assert q.price_return == pytest.approx(expected) and q.repurchased == 1e9
 
+    def test_a_blank_issuance_line_does_not_hide_the_quarter(self):
+        """GOOGL, 2026-10-30: Yahoo left issuance blank for 3 of 5 quarters, and those
+        quarters (one with a $5.5B buyback) disappeared from the report."""
+        nan = float("nan")
+        quarters = fl.quarterly_buybacks(_cashflow(repurchase=[0, 0, 0, -5.5e9, -11.5e9],
+                                                   issuance=[12.4e9, nan, nan, nan, 0.0]))
+        assert len(quarters) == 5
+        assert quarters[3].repurchased == 5.5e9 and math.isnan(quarters[3].issued)
+        both_blank = fl.quarterly_buybacks(_cashflow(repurchase=[nan, -1e9], issuance=[nan, 0.0],
+                                                     quarters=2))
+        assert len(both_blank) == 1
+
+    def test_unknown_amounts_print_as_na(self):
+        from agents import research_report
+
+        assert research_report._format_money(float("nan")) == "n/a"
+
 
 class TestOptions:
     def _chain(self, strikes, oi, iv):
@@ -309,3 +326,12 @@ class TestAnalyzeOffline:
         read = fl.analyze("TEST", today=TODAY)
         assert read.signal == "unknown" and math.isnan(read.score)
         assert all(c.score is None for c in read.components)
+
+
+def test_an_unchanged_share_count_says_so():
+    """XFAB.PA, 2026-11-02: 130.6M shares three years running read "shares shrank"."""
+    part = fl.issuance_component(fl.IssuanceInputs(
+        net_issuance=0.0, year_end=TODAY, source="yfinance annual balance sheet",
+        buyback_flag=fl.ASSUMED_ZERO))
+    assert "share count unchanged" in part.reason and "shrank" not in part.reason
+    assert part.score == 0.0 and math.copysign(1.0, part.score) == 1.0

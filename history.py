@@ -6,6 +6,7 @@
     python history.py backtest --from-sources  # same, recomputing the backfill in memory
     python history.py breadth-backtest         # RSP/SPY regime against what followed
     python history.py implied-move-study       # S&P moves against VIX/16, and what followed
+    python history.py settle                   # recorded verdicts against each local index
 
 Research output only -- not financial advice, and no orders are placed.
 """
@@ -21,7 +22,7 @@ import pandas as pd
 import yaml
 
 from agents import breadth_analyst, breadth_history, flow_history, implied_move, rescore
-from agents import sec_edgar, signal_snapshots, snapshot_store
+from agents import sec_edgar, signal_snapshots, snapshot_store, track_record
 from agents.research_report import MODEL_VERSION, WEIGHTS
 from backtests.market_data import load_ohlcv
 from config.settings import ROOT_DIR, load_scoring_config
@@ -175,6 +176,31 @@ def _breadth_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _settle(args: argparse.Namespace) -> int:
+    rows = signal_snapshots.load_rows()
+    if not rows:
+        print("No recorded runs yet: every research run is recorded, so run one first.",
+              file=sys.stderr)
+        return 1
+    calls = track_record.settle(rows, lambda s: load_ohlcv(s)["Close"])
+    csv_path, html_path = track_record.write_outputs(calls)
+    settled = sum(1 for c in calls for o in c.outcomes if not o.pending)
+    print(f"Track record: {len(rows)} recorded run(s) -> {len(calls)} call(s) "
+          f"(repeat runs with the same entry count once); {settled} horizon(s) settled.")
+    table = track_record.summary(calls)
+    if table.empty:
+        print("  Nothing settled yet: the first horizon is 1 week after each entry.")
+    for r in table.itertuples():
+        hit = "-" if r.hit_rate != r.hit_rate else f"{r.hit_rate:.0%}"
+        print(f"  {r.verdict:<12}{r.horizon:<4}{r.calls:>4} call(s)  mean excess "
+              f"{r.mean_excess:+.1%}  median {r.median_excess:+.1%}  right {hit}")
+    for call in calls:
+        if call.note:
+            print(f"  {call.symbol} {call.recorded_at[:10]}: {call.note}")
+    print(f"CSV: {csv_path}\nHTML: {html_path}")
+    return 0
+
+
 def _implied_move_study(args: argparse.Namespace) -> int:
     table = implied_move.move_table(load_ohlcv(implied_move.INDEX)["Close"],
                                     load_ohlcv(implied_move.VOL_INDEX)["Close"])
@@ -205,6 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Recompute the backfill in memory instead of reading the store.")
     commands.add_parser("breadth-backtest",
                         help="The RSP/SPY regime against the ratio and sector ETFs afterwards.")
+    commands.add_parser("settle",
+                        help="Every recorded verdict against the stock's local index since.")
     commands.add_parser("implied-move-study",
                         help="S&P 500 moves against VIX/16 since 1990, and what followed.")
     return parser
@@ -214,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     commands = {"rescore": _rescore, "backfill": _backfill, "backtest": _backtest,
                 "breadth-backtest": _breadth_backtest,
-                "implied-move-study": _implied_move_study}
+                "implied-move-study": _implied_move_study, "settle": _settle}
     return commands[args.command](args)
 
 

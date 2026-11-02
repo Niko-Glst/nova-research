@@ -55,6 +55,8 @@ def _no_live_flows(monkeypatch):
     monkeypatch.setattr(flow_analyst, "analyze", lambda *a, **k: _flows("unknown"))
     monkeypatch.setattr(breadth_analyst, "analyze", lambda *a, **k: _breadth("unknown"))
     monkeypatch.setattr(implied_move, "analyze", lambda *a, **k: _market_move())
+    monkeypatch.setattr(research_report.track_record, "for_symbol", lambda *a, **k: [])
+    monkeypatch.setattr(research_report.risk_read, "analyze", lambda *a, **k: None)
 
 
 def _insider(signal: str) -> insider_analyst.InsiderRead:
@@ -156,7 +158,8 @@ class TestWeightedScoring:
         monkeypatch.setattr(breadth_analyst, "analyze", _capture)
         monkeypatch.setattr(ta_analyst, "analyze", lambda *a, **k: _technical("neutral"))
         monkeypatch.setattr(research_report.fa_analyst, "analyze", lambda *a, **k: FundamentalRead(
-            symbol="TEST", metrics={"market_cap": 7e11}, signal="fair", notes="",
+            symbol="TEST", metrics={"market_cap": 1e14, "market_cap_usd": 7e11}, signal="fair",
+            notes="",
             sector="Financial Services"))
         monkeypatch.setattr(sentiment_analyst, "analyze", lambda *a, **k: _sentiment("neutral"))
         monkeypatch.setattr(insider_analyst, "analyze", lambda *a, **k: _insider("neutral"))

@@ -175,10 +175,20 @@ def score_sentiment(mentions: list[dict]) -> float:
 # Legal-form suffixes stripped from a company name before searching Reddit:
 # nobody writes "Schneider Electric S.E." in a post title.
 _LEGAL_SUFFIX = re.compile(
-    r"[\s,]+(s\.?e|s\.?a|a\.?g|aktiengesellschaft|plc|n\.?v|ltd|inc|corp|"
+    r"[\s,]+(s\.?e|s\.?a|a\.?g|aktiengesellschaft|plc|n\.?v|ltd|limited|inc|corp|"
     r"corporation|co|company|holdings?|group)\.?$",
     re.IGNORECASE,
 )
+
+
+def plain_company_name(company_name: str) -> str:
+    """The name without legal suffixes: 'BE Semiconductor Industries N.V.' -> '... Industries'."""
+    name = company_name.strip()
+    while True:
+        stripped = _LEGAL_SUFFIX.sub("", name).strip()
+        if stripped == name or not stripped:
+            return name
+        name = stripped
 
 
 def reddit_search_query(symbol: str, company_name: str = "") -> str:
@@ -186,20 +196,17 @@ def reddit_search_query(symbol: str, company_name: str = "") -> str:
 
     A US ticker is how people write about the stock, so it is searched as-is.
     An exchange-suffixed ticker ("SU.PA", "SIE.DE") is not -- searching for it
-    returns nothing -- and its bare root ("SU") is too ambiguous to search, so
-    those are searched by quoted company name instead.
+    returns nothing -- so those are searched by quoted company name, and also by
+    the bare ticker root when it is distinctive enough ("BESI" for BESI.AS; owner
+    2026-10-28). A short or numeric root ("SU", "0522") is too ambiguous and is
+    left out (news_sources.ticker_root).
     """
     symbol = symbol.strip().upper()
     if "." not in symbol or not company_name.strip():
         return symbol
-
-    name = company_name.strip()
-    while True:
-        stripped = _LEGAL_SUFFIX.sub("", name).strip()
-        if stripped == name or not stripped:
-            break
-        name = stripped
-    return f'"{name}"'
+    quoted = f'"{plain_company_name(company_name)}"'
+    root = news_sources.ticker_root(symbol)
+    return f"{quoted} OR {root}" if root else quoted
 
 
 def fetch_reddit_mentions(
@@ -300,16 +307,6 @@ def _news_headlines(items: list[news_sources.NewsItem]) -> list[news_signal.Head
     return sorted(out, key=lambda h: h.age_days if h.age_days is not None else float("inf"))
 
 
-def fetch_news_mentions(symbol: str, allowed_domains: list[str]) -> list[news_sources.NewsItem]:
-    """Fetch recent news for a symbol, restricted to allowed_domains.
-
-    Delegates to news_sources, which prefers Tiingo and falls back to yfinance.
-    Kept as a named function because it is part of this module's public surface.
-    """
-    items, _ = news_sources.fetch_news(symbol, allowed_domains)
-    return items
-
-
 def analyze(
     symbol: str,
     strict_allowlist: bool = True,
@@ -349,7 +346,8 @@ def analyze(
 
     # --- News -------------------------------------------------------------
     news_items, news_unavailable = news_sources.fetch_news(
-        symbol, news_domains if strict_allowlist else []
+        symbol, news_domains if strict_allowlist else [],
+        company_name=plain_company_name(company_name) if company_name else "",
     )
     unavailable.extend(news_unavailable)
 

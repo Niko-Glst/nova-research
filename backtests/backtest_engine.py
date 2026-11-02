@@ -125,7 +125,15 @@ def _extract_trades(
 
     for k, entry_index in enumerate(entry_indices):
         # An open position at the end of the series is closed at the last bar.
-        exit_index = exit_indices[k] if k < len(exit_indices) else len(position) - 1
+        open_at_end = k >= len(exit_indices)
+        exit_index = len(position) - 1 if open_at_end else exit_indices[k]
+        # The equity curve earns bar i's move when position[i] is 1, so a
+        # position starting at bar i was bought at close i-1, and one ending at
+        # bar j (position[j] == 0) was sold at close j-1. The trade list reports
+        # those same prices; until 2026-10-28 it used closes i and j, one day
+        # late, so trades did not add up to the equity curve.
+        entry_index = max(int(entry_index) - 1, 0)
+        exit_index = int(exit_index) if open_at_end else int(exit_index) - 1
         entry_price = prices[entry_index]
         exit_price = prices[exit_index]
         if entry_price <= 0:
@@ -176,7 +184,10 @@ def run_backtest(
     position = _positions_from_signals(entries.to_numpy(), exits.to_numpy())
     fee_rate = fees_bps / 10_000.0
 
-    # Bar-by-bar returns, earned only while positioned.
+    # Bar-by-bar returns, earned only while positioned. After the one-bar shift,
+    # position[i] earns bar i's move (close i-1 to close i): a signal formed at a
+    # close is traded at that close and earns from the next bar on, the same
+    # convention as the walk-forward study (backtests/walk_forward.py).
     price_returns = np.zeros_like(prices)
     price_returns[1:] = prices[1:] / prices[:-1] - 1.0
     strategy_returns = position * price_returns

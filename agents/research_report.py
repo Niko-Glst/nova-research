@@ -4,7 +4,8 @@ Runs the six analysts for one ticker -- technical, fundamental (with niche peer
 comparison), sentiment, insider activity, market flows and market breadth -- and
 combines their stances into one weighted verdict with the reasoning behind it.
 It also reads the S&P 500's last move against the move VIX implied
-(agents/implied_move.py), shown but not scored.
+(agents/implied_move.py), shown but not scored, and the risk gate with a position
+size (agents/risk_read.py), likewise.
 
 The weights encode how much each leg deserves to be trusted:
 
@@ -33,8 +34,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from agents import breadth_analyst, fa_analyst, flow_analyst, flow_evidence, implied_move
-from agents import insider_analyst, sentiment_analyst
+from agents import breadth_analyst, currency, fa_analyst, flow_analyst, flow_evidence, implied_move
+from agents import insider_analyst, position_strategy, risk_read, sentiment_analyst
+from agents import track_record
 from agents import strategy_agent
 from agents import swot as swot_module
 from agents import ta_analyst, thesis as thesis_module
@@ -77,6 +79,8 @@ class ResearchReport:
     flows: flow_analyst.FlowRead | None = None
     breadth: breadth_analyst.BreadthRead | None = None
     market_move: implied_move.MarketMove | None = None  # shown, not scored
+    # Earlier verdicts on this ticker, settled against its local index (shown only).
+    past_calls: list | None = None
     errors: dict[str, str] = field(default_factory=dict)
     summary: str = ""
     thesis: thesis_module.Thesis | None = None
@@ -88,6 +92,12 @@ class ResearchReport:
     simulated_returns: object = field(default=None, repr=False)
     buy_hold_equity: object = field(default=None, repr=False)
     outcomes: outcome_distribution.OutcomeDistribution | None = None
+    # The position-trading rule (agents/position_strategy.py), with --simulate.
+    position_backtest: object = None
+    # The other rules, as (name, rationale, BacktestResult), with --simulate.
+    other_rules: list = field(default_factory=list)
+    # The risk gate and position size (agents/risk_read.py); shown, not scored.
+    risk: risk_read.RiskRead | None = None
     model_version: str = ""
 
 
@@ -192,7 +202,7 @@ def analyze(
         breadth = breadth_analyst.analyze(
             symbol,
             sector=fundamental.sector if fundamental and fundamental.sector else None,
-            market_cap=fundamental.metrics.get("market_cap") if fundamental else None,
+            market_cap=fundamental.metrics.get("market_cap_usd") if fundamental else None,
         )
         report_progress("breadth", f"Breadth read: {breadth.signal}")
     except Exception as exc:
@@ -208,12 +218,23 @@ def analyze(
         errors["market"] = f"{type(exc).__name__}: {exc}"
         report_progress("market", "Market move unavailable")
 
+    past_calls: list | None = None
+    report_progress("history", "Settling earlier verdicts on this ticker")
+    try:
+        past_calls = track_record.for_symbol(symbol)
+        report_progress("history", f"{len(past_calls)} earlier call(s) on {symbol}")
+    except Exception as exc:
+        errors["track_record"] = f"{type(exc).__name__}: {exc}"
+        report_progress("history", "Track record unavailable")
+
     # --- Backtest and simulation (opt-in: it refetches a longer history) ---
     backtest_result = None
     simulation = None
     simulated = None
     buy_hold = None
     outcomes = None
+    position_backtest = None
+    other_rules: list = []
     if run_simulation:
         report_progress("simulation", "Running backtest and outcome simulation")
         try:
@@ -249,6 +270,19 @@ def analyze(
                     strategy_returns, num_simulations, 252, seed=42
                 )
                 simulated = (_np.cumprod(1.0 + paths, axis=1)[:, -1] - 1.0) * 100.0
+            try:  # the position-trading rule, beside the crossover
+                position_backtest = position_strategy.run(symbol, history, num_simulations)
+            except Exception as exc:
+                errors["position_backtest"] = f"{type(exc).__name__}: {exc}"
+            try:  # the two other rules, on the same history and costs
+                for name, rule in (("Trend and momentum", strategy_agent.thesis_signals),
+                                   ("Donchian breakout", strategy_agent.donchian_breakout)):
+                    rule_signals = rule(history, symbol=symbol)
+                    other_rules.append((name, rule_signals.rationale, backtest_engine.run_backtest(
+                        history, rule_signals.entries, rule_signals.exits, fees_bps=10,
+                        symbol=symbol)))
+            except Exception as exc:
+                errors["other_rules"] = f"{type(exc).__name__}: {exc}"
             report_progress("simulation", "Simulation complete")
         except Exception as exc:
             errors["backtest"] = f"{type(exc).__name__}: {exc}"
@@ -294,6 +328,16 @@ def analyze(
         f"from {len(reported)} of {len(WEIGHTS)} analysts)."
     )
 
+    risk: risk_read.RiskRead | None = None
+    report_progress("risk", "Reading risk and position size against the local index")
+    try:
+        peers = fundamental.peer_comparison if fundamental else None
+        risk = risk_read.analyze(symbol, score, peers.peers_used if peers else ())
+        report_progress("risk", "Risk and position size read")
+    except Exception as exc:
+        errors["risk"] = f"{type(exc).__name__}: {exc}"
+        report_progress("risk", "Risk read unavailable")
+
     evidence: list[str] = []
     if flows is not None:
         try:  # the rank needs the backfill; without it the lines say so
@@ -320,6 +364,7 @@ def analyze(
         flows=flows,
         breadth=breadth,
         market_move=market_move,
+        past_calls=past_calls,
         errors=errors,
         summary=summary,
         thesis=thesis_module.build_thesis(
@@ -333,16 +378,23 @@ def analyze(
         simulated_returns=simulated,
         buy_hold_equity=buy_hold,
         outcomes=outcomes,
+        position_backtest=position_backtest,
+        other_rules=other_rules,
+        risk=risk,
         model_version=MODEL_VERSION,
     )
 
 
-def _format_money(value: float) -> str:
-    """Render a currency amount compactly (1.2B rather than 1200000000)."""
-    for threshold, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
-        if abs(value) >= threshold:
-            return f"${value / threshold:,.2f}{suffix}"
-    return f"${value:,.2f}"
+def _format_money(value: float, code: str = "USD") -> str:
+    """Render a currency amount compactly (1.2B rather than 1200000000); n/a when unknown."""
+    return currency.money(value, code)
+
+
+def market_cap_text(metrics: dict, quote: str) -> str:
+    """The market cap in its own currency, with dollars alongside when they differ."""
+    text = _format_money(metrics["market_cap"], quote)
+    usd = metrics.get("market_cap_usd")
+    return f"{text} (about {_format_money(usd)})" if usd is not None and quote != "USD" else text
 
 
 def format_report(report: ResearchReport) -> str:
@@ -383,7 +435,8 @@ def format_report(report: ResearchReport) -> str:
                 f"  Earnings yield:   {metrics['earnings_yield_pct']:>9.2f}%"
             )
         if market_cap is not None:
-            lines.append(f"  Market cap:       {_format_money(market_cap):>10}")
+            lines.append(f"  Market cap:       "
+                         f"{market_cap_text(metrics, fundamental.quote_currency):>10}")
         if metrics.get("profit_margin") is not None:
             lines.append(f"  Net margin:       {metrics['profit_margin'] * 100:>9.1f}%")
         if metrics.get("revenue_growth") is not None:
@@ -440,10 +493,20 @@ def format_report(report: ResearchReport) -> str:
             f"  Open-market sells:{insider.sell_count:>4}   "
             f"{_format_money(insider.sell_value)}",
             f"  Net flow:         {_format_money(insider.net_value)}",
+            f"  Senior leadership: {insider.senior_buy_count} buys, "
+            f"{insider.senior_sell_count} sells",
             "",
         ]
         for reason in insider.reasons:
             lines.append(f"    - {reason}")
+        trades = insider.open_market_trades
+        if trades:
+            lines += ["", "  Open-market trades:"]
+        for trade in trades:
+            when = trade.date.date() if trade.date else "date unknown"
+            side = trade.category.removeprefix("open_market_")
+            lines.append(f"    {when}  {side:<4} {_format_money(trade.value):>10}  "
+                         f"{trade.insider} ({trade.position})")
         lines.append("")
 
     # --- Flows ------------------------------------------------------------
@@ -459,8 +522,10 @@ def format_report(report: ResearchReport) -> str:
             lines += ["", "  Buybacks by quarter (shown, not scored):"]
             for q in flows.quarters:
                 move = "" if q.price_return is None else f"   stock {q.price_return:+.1%}"
-                lines.append(f"    {q.quarter_end}  bought back {_format_money(q.repurchased):>10}"
-                             f"  issued {_format_money(q.issued):>10}{move}")
+                code = flows.report_currency
+                lines.append(f"    {q.quarter_end}  bought back "
+                             f"{_format_money(q.repurchased, code):>10}"
+                             f"  issued {_format_money(q.issued, code):>10}{move}")
         options = flows.options
         if options is not None:
             lines += [
@@ -512,6 +577,75 @@ def format_report(report: ResearchReport) -> str:
         if mm.base_text():
             lines.append(f"    - {mm.base_text()}")
         lines += ["", "  Shown, not scored.", ""]
+
+    # --- Position-trading rule ----------------------------------------------
+    pb = report.position_backtest
+    if pb is not None:
+        bt = pb.backtest
+        lines += ["-" * width, "  POSITION-TRADING RULE (pullback in an uptrend)", "-" * width]
+        if pb.levels is not None:
+            for name, ok in pb.levels.conditions_now.items():
+                lines.append(f"    [{'x' if ok else ' '}] "
+                             f"{position_strategy.CONDITION_TEXT[name]}")
+        crossover = "" if report.backtest is None else \
+            f", 50/200 crossover {report.backtest.total_return_pct:+.1f}%"
+        lines.append(f"  Backtest: {bt.total_return_pct:+.1f}% over {bt.num_trades} trade(s) "
+                     f"(win rate {bt.win_rate_pct:.0f}%, max drawdown "
+                     f"{bt.max_drawdown_pct:.1f}%); buy & hold "
+                     f"{bt.buy_and_hold_return_pct:+.1f}%{crossover}.")
+        if pb.stop_in_force is not None:
+            lines.append(f"  Open trade: stop in force at {pb.stop_in_force:,.2f}.")
+        lines.append("")
+
+    # --- Every rule, the simulation and the odds ------------------------------
+    if report.backtest is not None:
+        lines += ["-" * width, "  BACKTESTS (50/200 crossover, then the other rules)", "-" * width]
+        lines.append(report.backtest.summary())
+        for name, rationale, result in report.other_rules:
+            lines += ["", f"  {name}: {rationale}",
+                      f"    {result.total_return_pct:+.1f}% over {result.num_trades} trade(s), "
+                      f"max drawdown {result.max_drawdown_pct:.1f}%, "
+                      f"Sharpe {result.sharpe_ratio:.2f}"]
+        if report.monte_carlo is not None:
+            lines += ["", report.monte_carlo.summary()]
+        if report.outcomes is not None:
+            lines += ["", report.outcomes.summary()]
+        lines.append("")
+
+    # --- Risk and size ------------------------------------------------------
+    if report.risk is not None:
+        risk = report.risk
+        lines += ["-" * width, "  RISK AND SIZE (shown, not scored)", "-" * width]
+        lines.append(risk.assessment.summary())
+        lines += ["", f"  No holdings are stored, so {risk.benchmark} stands in for the book. "
+                      f"Returns since {risk.start}.",
+                  f"  Size as % of equity, at conviction {risk.conviction:.0%} (the score when "
+                  f"positive) and at full conviction:"]
+        for size in risk.sizes:
+            lines.append(f"    {size.method:<18} {size.at_score.position_size_pct:>6.2f}%  "
+                         f"{size.at_full_conviction.position_size_pct:>6.2f}%")
+        if risk.peers:
+            lines += ["", "  Correlation with peers: " + ", ".join(
+                f"{p.peer} {p.correlation:+.2f}" for p in risk.peers)]
+        if risk.peers_unavailable:
+            lines.append("  No price history for: " + ", ".join(risk.peers_unavailable))
+        lines.append("")
+
+    # --- Past calls -------------------------------------------------------
+    if report.past_calls is not None:
+        lines += ["-" * width, "  PAST CALLS ON THIS TICKER (vs its local index)", "-" * width]
+        if not report.past_calls:
+            lines.append("    No earlier run of this ticker is recorded yet.")
+        for call in report.past_calls:
+            score = "" if call.score != call.score else f" {call.score:+.2f}"
+            lines.append(f"  {call.recorded_at[:10]}  {call.verdict.upper()}{score}  "
+                         f"(model {call.model_version})  entry "
+                         f"{call.entry_date or 'none yet'}")
+            for outcome in call.outcomes:
+                lines.append(f"      {outcome.label:<3} {track_record.outcome_text(call, outcome)}")
+            if call.note:
+                lines.append(f"      {call.note}")
+        lines += ["", f"  {track_record.DIVIDEND_NOTE} Shown only, never scored.", ""]
 
     # --- Sentiment --------------------------------------------------------
     if report.sentiment is not None:
@@ -601,6 +735,17 @@ def format_report(report: ResearchReport) -> str:
             lines += ["", "  FLOW EVIDENCE (inputs, not verdicts):"]
             for item in thesis.evidence:
                 lines.append(f"    - {item}")
+        lines.append("")
+
+    # --- SWOT -------------------------------------------------------------
+    if report.swot is not None and not report.swot.is_empty:
+        lines += ["-" * width, "  SWOT", "-" * width]
+        for title, items in (("Strengths", report.swot.strengths),
+                             ("Weaknesses", report.swot.weaknesses),
+                             ("Opportunities", report.swot.opportunities),
+                             ("Threats", report.swot.threats)):
+            for item in items:
+                lines.append(f"  {title}: {item.text} ({item.metric}: {item.value})")
         lines.append("")
 
     # --- Errors -----------------------------------------------------------

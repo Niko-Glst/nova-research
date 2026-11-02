@@ -122,7 +122,7 @@ footer { margin-top: 34px; text-align: center; font-size: 12px; color: var(--mut
 <body><div class="wrap">
 <div class="brand">NIKOLAY GELSHTEIN</div>
 <h1>nova-research</h1>
-<p class="tagline">Four analysts, a falsifiable thesis, and a distribution of
+<p class="tagline">Six analysts, a falsifiable thesis, and a distribution of
 outcomes. Research only &mdash; not advice.</p>
 
 <div class="card">
@@ -168,7 +168,9 @@ const STAGES = [
   ["flows",       "Flows"],
   ["breadth",     "Breadth"],
   ["market",      "Market move vs VIX/16"],
+  ["history",     "Past calls on this ticker"],
   ["simulation",  "Simulation"],
+  ["risk",        "Risk and size"],
 ];
 
 const form = document.getElementById("form");

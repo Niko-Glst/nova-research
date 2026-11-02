@@ -25,7 +25,6 @@ from correlations.estimators import (
     COVARIANCE_WINDOW,
     DEFAULT_COVARIANCE_METHOD,
     CorrelationEstimate,
-    PairStatistic,
 )
 from correlations.evaluation import FORECAST_ERROR, LONG_ONLY, EstimatorScore
 from correlations.synchronicity import EPPS_FLAG_THRESHOLD
@@ -547,8 +546,3 @@ def to_jsonable(value):
     if isinstance(value, np.bool_):
         return bool(value)
     return value
-
-
-def summary_pairs(estimate: CorrelationEstimate) -> list[PairStatistic]:
-    """Pairs sorted strongest first; convenience for callers."""
-    return sorted(estimate.pairs, key=lambda p: -abs(p.correlation))

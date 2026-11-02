@@ -98,7 +98,6 @@ FX_TIMING_MARGIN = 0.10
 
 FREQUENCIES = ("daily", "weekly")
 
-DateIndex = pd.DatetimeIndex
 Fetcher = Callable[[str, str], pd.DataFrame]
 
 

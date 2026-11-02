@@ -276,7 +276,3 @@ class TestSizing:
         assessment = risk.assess("GOOD", candidate, None)
         decision = alloc.size_position("GOOD", 0.7, asdict(assessment), 100_000)
         assert decision.position_size_pct > 0
-
-    def test_summary_renders(self, approved):
-        decision = alloc.size_position("X", 0.5, approved, 100_000)
-        assert "Allocation" in decision.summary()

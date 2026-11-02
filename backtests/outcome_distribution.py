@@ -17,8 +17,8 @@ honest measure of how much the answer depends on which world you are in.
 **What this is not.** These are the stock's own historical returns, resampled.
 Nothing here conditions on the fundamental or technical read, because doing so
 credibly needs point-in-time snapshots of those signals taken before each
-return period, which this project does not store (see backtests/signal_study.py
-for the same limitation). A company whose character has just changed -- a first
+return period, and those only exist from 2026-10 on. A company whose character
+has just changed -- a first
 profitable year, a large acquisition -- is not well described by its own past,
 and no amount of resampling fixes that. `caveats` states this on every result.
 """
@@ -353,24 +353,3 @@ def build_distribution(
         regime_threshold_pct=threshold,
         caveats=caveats,
     )
-
-
-def historical_drawdowns(price_history: pd.DataFrame) -> dict[str, float]:
-    """How often this stock actually fell by each threshold, from real prices.
-
-    The simulated probabilities answer "how often would this happen"; this
-    answers "how often did it". When the two disagree sharply, the resampling
-    assumption is the thing to doubt.
-    """
-    close = price_history["Close"].astype(float)
-    running_max = close.cummax()
-    drawdown = (close / running_max - 1.0) * 100.0
-
-    return {
-        "worst_drawdown_pct": float(drawdown.min()),
-        "median_drawdown_pct": float(drawdown.median()),
-        **{
-            f"days_beyond_{int(t)}pct": float((drawdown <= -t).mean())
-            for t in DRAWDOWN_THRESHOLDS
-        },
-    }

@@ -26,8 +26,6 @@ stats = [
 ]
 dev = [
     "pytest>=7.0",
-    "pre-commit>=3.0",
-    "detect-secrets>=1.4",
     "scipy>=1.11",
 ]
 

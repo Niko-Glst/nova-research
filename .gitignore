@@ -31,11 +31,7 @@ env/
 .Python
 *.so
 
-# --- Data (never commit raw/processed data) ---
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
+# --- Data (never commit data) ---
 # Price cache written by correlations/data.py; regenerated on demand.
 data/cache/
 # Point-in-time signal history written by agents/signal_snapshots.py.
@@ -45,8 +41,7 @@ data/snapshots/
 *.log
 logs/
 
-# --- Notebooks ---
-notebooks/.ipynb_checkpoints/
+# --- Notebooks (none in the project; checkpoints if one is ever opened) ---
 .ipynb_checkpoints/
 
 # --- OS ---
@@ -63,8 +58,6 @@ Thumbs.db
 htmlcov/
 .mypy_cache/
 .ruff_cache/
-
-# --- detect-secrets baseline is tracked on purpose (not ignored) ---
 
 # --- Generated HTML reports ---
 reports/

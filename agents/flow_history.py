@@ -33,7 +33,6 @@ from __future__ import annotations
 import html
 import math
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -378,7 +377,3 @@ def caveats(tickers: int) -> list[str]:
         "time: companyfacts keeps the values as filed in each document.",
         "No weights were fitted to these results (owner's rule); they are a report.",
     ]
-
-
-def today_iso() -> str:
-    return date.today().isoformat()

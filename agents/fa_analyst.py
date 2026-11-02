@@ -18,6 +18,7 @@ from statistics import median
 
 import yfinance as yf
 
+from agents import currency
 from common.rate_limit import get_limiter
 from config.settings import load_allowed_sources
 
@@ -89,6 +90,8 @@ class FundamentalRead:
     peer_comparison: PeerComparison | None = None
     name: str = ""  # company name, e.g. for searching sources that don't use tickers
     sector: str = ""  # yfinance sector label (breadth_analyst groups stocks by it)
+    quote_currency: str = "USD"  # main currency of the market cap and the price
+    report_currency: str = "USD"  # currency of revenue, cash flow and book value
 
 
 def _normalize_key(text: str) -> str:
@@ -146,11 +149,72 @@ def _repair_margins(out: dict, info: dict) -> list[str]:
     return notes
 
 
+def _align_currencies(out: dict, info: dict) -> list[str]:
+    """Put market-cap ratios in one currency, and the market cap in dollars.
+
+    Yahoo divides its market cap (quote currency) by revenue (reporting
+    currency) without converting, and likewise its price by book value:
+    Sofwave's price/sales read 11.9 for a true 3.8. Checked on 2026-11-02 across
+    Tel Aviv, London, Paris and US-listed foreign shares:
+
+    - price/sales: wrong wherever the two currencies differ; recomputed.
+    - price/book: wrong for local listings (BP 2.0, true 2.7); recomputed.
+      For US-listed foreign shares Yahoo's book value is already in dollars
+      (Alibaba, Novo), but TSMC's is on another share basis than its ADR, so
+      these are left as given and flagged.
+    - P/E: right as given. EPS is in the quote currency (BP 0.42 is its $0.58
+      in pounds), so nothing is changed.
+    """
+    quote, reported = currency.quote_currency(info), currency.report_currency(info)
+    out["_quote_currency"], out["_report_currency"] = quote, reported
+    notes: list[str] = []
+    divisor = currency.minor_divisor(info.get("currency"))
+    if divisor != 1.0:
+        notes.append(f"Prices are quoted in {info.get('currency')}, 1/{divisor:g} of a {quote}.")
+    cap = out.get("market_cap")
+    usd = currency.convert(cap, quote, "USD") if cap else None
+    if usd is not None:
+        out["market_cap_usd"] = usd
+    if quote == reported:
+        return notes
+
+    cap_reported = currency.convert(cap, quote, reported) if cap else None
+    if cap and cap_reported is None:
+        notes.append(f"Trades in {quote} but reports in {reported}, and no exchange rate was "
+                     f"available: price/sales and price/book mix the two.")
+        return notes
+    fixed = []
+    revenue = out.get("total_revenue")
+    if cap_reported and revenue and "price_to_sales" in out:
+        was, out["price_to_sales"] = out["price_to_sales"], cap_reported / revenue
+        fixed.append(f"price/sales {out['price_to_sales']:.2f} (Yahoo {was:.2f})")
+    if cap_reported:
+        out["_cap_reported"] = cap_reported
+    if quote == "USD":
+        if "price_to_book" in out:
+            notes.append(f"Price/book is Yahoo's: for a US-listed foreign share its book value "
+                         f"can be on a different share basis, so treat {out['price_to_book']:.2f} "
+                         f"with care.")
+    else:
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        book = info.get("bookValue")
+        price_reported = (currency.convert(float(price) / divisor, quote, reported)
+                          if price else None)
+        if price_reported and book and "price_to_book" in out:
+            was, out["price_to_book"] = out["price_to_book"], price_reported / float(book)
+            fixed.append(f"price/book {out['price_to_book']:.2f} (Yahoo {was:.2f})")
+    if fixed:
+        notes.append(f"Trades in {quote} but reports in {reported}: recomputed in one currency, "
+                     f"{' and '.join(fixed)}.")
+    return notes
+
+
 def extract_fundamentals(info: dict, symbol: str) -> dict[str, float]:
     """The fields this module reads from a yfinance info dict, as floats.
 
-    Fields yfinance did not provide are omitted rather than defaulted, and
-    placeholder margins are repaired (see _repair_margins).
+    Fields yfinance did not provide are omitted rather than defaulted,
+    placeholder margins are repaired (see _repair_margins) and market-cap ratios
+    are put in one currency (see _align_currencies).
     """
     out: dict[str, float] = {}
     for raw_key, name in _RAW_FIELDS.items():
@@ -163,6 +227,7 @@ def extract_fundamentals(info: dict, symbol: str) -> dict[str, float]:
             continue
 
     data_notes = _repair_margins(out, info)
+    out["_currency_notes"] = " ".join(_align_currencies(out, info))
 
     # Sector/industry are strings, kept under private keys so they travel with
     # the metrics dict without polluting the numeric output.
@@ -199,7 +264,8 @@ def compute_ratios(fundamentals: dict[str, float]) -> dict[str, float]:
 
     eps = fundamentals.get("trailing_eps")
     forward_eps = fundamentals.get("forward_eps")
-    market_cap = fundamentals.get("market_cap")
+    # Free cash flow and revenue are in the reporting currency; so must the cap be.
+    market_cap = fundamentals.get("_cap_reported") or fundamentals.get("market_cap")
     revenue = fundamentals.get("total_revenue")
     fcf = fundamentals.get("free_cashflow")
 
@@ -468,6 +534,8 @@ def analyze(symbol: str, include_peers: bool = True) -> FundamentalRead:
     signal, reasons = _classify(metrics, peer_comparison)
     if raw.get("_data_notes"):
         reasons.append(f"Data repaired: {raw['_data_notes']}")
+    if raw.get("_currency_notes"):
+        reasons.append(f"Currency: {raw['_currency_notes']}")
 
     industry = raw.get("_industry") or "unknown industry"
     sector = raw.get("_sector") or "unknown sector"
@@ -487,4 +555,6 @@ def analyze(symbol: str, include_peers: bool = True) -> FundamentalRead:
         peer_comparison=peer_comparison,
         name=str(raw.get("_name") or ""),
         sector=str(raw.get("_sector") or ""),
+        quote_currency=str(raw.get("_quote_currency") or "USD"),
+        report_currency=str(raw.get("_report_currency") or "USD"),
     )

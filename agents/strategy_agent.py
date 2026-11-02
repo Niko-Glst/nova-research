@@ -50,14 +50,6 @@ class StrategySignals:
     exits: pd.Series  # boolean series aligned to price index
     rationale: str
 
-    @property
-    def entry_count(self) -> int:
-        return int(self.entries.sum())
-
-    @property
-    def exit_count(self) -> int:
-        return int(self.exits.sum())
-
 
 def moving_average_crossover(
     price_history: pd.DataFrame,
@@ -196,20 +188,3 @@ def donchian_breakout(
             f"on a close below the {exit_period}-day low.{volume_note}"
         ),
     )
-
-
-def generate_signals(
-    symbol: str, thesis: dict, price_history: pd.DataFrame
-) -> StrategySignals:
-    """Generate entry/exit signals for a symbol given its thesis and price history.
-
-    Kept for the interface the pipeline scaffold defines. `thesis` may carry a
-    "strategy" key selecting between the rules above; it defaults to the
-    thesis-driven one.
-    """
-    strategy = (thesis or {}).get("strategy", "thesis")
-    if strategy == "crossover":
-        return moving_average_crossover(price_history, symbol=symbol)
-    if strategy == "breakout":
-        return donchian_breakout(price_history, symbol=symbol)
-    return thesis_signals(price_history, symbol=symbol)

@@ -44,6 +44,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from agents import currency
 from agents.ta_analyst import fetch_price_history
 from common.rate_limit import get_limiter
 from config.settings import load_scoring_config
@@ -193,7 +194,10 @@ def stance(score: float | None) -> str:
 
 
 def _group_text(group: str, sector: str, market_cap: float | None) -> str:
-    cap = f", market cap ${market_cap / 1e9:,.0f}B" if market_cap else ""
+    cap = ""
+    if market_cap:
+        cap = (f", market cap ${market_cap / 1e9:,.0f}B" if market_cap >= 1e9
+               else f", market cap ${market_cap / 1e6:,.0f}M")
     if group == BREADTH:
         return f"{sector or 'its sector'} is a breadth sector{cap}: it scores the regime as is."
     if group == LEADER:
@@ -204,13 +208,14 @@ def _group_text(group: str, sector: str, market_cap: float | None) -> str:
 
 def analyze(symbol: str, sector: str | None = None,
             market_cap: float | None = None) -> BreadthRead:
-    """The breadth regime and what it means for `symbol`."""
+    """The breadth regime and what it means for `symbol`. `market_cap` is in dollars."""
     symbol = symbol.strip().upper()
     if sector is None or market_cap is None:
         get_limiter("yfinance").wait()
         info = yf.Ticker(symbol).info or {}
         sector = sector if sector is not None else str(info.get("sector") or "")
-        market_cap = market_cap if market_cap is not None else info.get("marketCap")
+        # In dollars: Toyota's 35.9 trillion is yen, about $228B, not a mega cap.
+        market_cap = market_cap if market_cap is not None else currency.market_cap_usd(info)
     group = classify_stock(sector, market_cap)
     ew = fetch_price_history(EQUAL_WEIGHT, period=PRICE_PERIOD)["Close"]
     cw = fetch_price_history(CAP_WEIGHT, period=PRICE_PERIOD)["Close"]

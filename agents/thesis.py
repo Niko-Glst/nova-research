@@ -53,10 +53,6 @@ class Thesis:
     # Inputs, not verdicts: they never change the stance, summary or conditions.
     evidence: list[str] = field(default_factory=list)
 
-    @property
-    def met_fraction(self) -> float:
-        return self.conditions_met / self.conditions_total if self.conditions_total else 0.0
-
 
 def _profitability_conditions(metrics: dict[str, float]) -> list[Condition]:
     """Conditions about earning money, or credibly getting there."""
@@ -179,7 +175,9 @@ def _valuation_conditions(fundamental: FundamentalRead) -> list[Condition]:
                     claim=f"Valuation stays reasonable against {peers.niche} peers",
                     current=(
                         f"Forward P/E at {forward_pe_rel:.2f}x the peer median, "
-                        f"at or below the group."
+                        + ("at or below the group." if forward_pe_rel <= 1.0 else
+                           f"a {forward_pe_rel - 1:.0%} premium, within the 1.5x this "
+                           f"condition allows.")
                     ),
                     met=True,
                     metric="forward_pe",

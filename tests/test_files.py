@@ -11,7 +11,7 @@ import pytest
 
 from agents import sec_edgar
 from backtests import market_data
-from common.files import atomic_write, atomic_write_text
+from common.files import atomic_write, atomic_write_text, retry_on_lock
 
 
 def test_a_failed_write_leaves_the_old_file_whole(tmp_path):
@@ -26,6 +26,71 @@ def test_a_failed_write_leaves_the_old_file_whole(tmp_path):
         atomic_write(path, crash)
     assert path.read_bytes() == original
     assert [p.name for p in tmp_path.iterdir()] == ["prices.csv"]  # no temp left behind
+
+
+class TestLockedFiles:
+    """OneDrive or a scanner holding a file shows up as PermissionError for a moment."""
+
+    def test_a_brief_lock_is_waited_out(self):
+        calls, waits = [], []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) < 3:
+                raise PermissionError(5, "Toegang geweigerd")
+            return "done"
+
+        assert retry_on_lock(flaky, sleep=waits.append) == "done"
+        assert waits == [0.25, 0.5]  # doubling waits, then success
+
+    def test_a_lasting_lock_still_raises(self):
+        def locked():
+            raise PermissionError(5, "Toegang geweigerd")
+
+        with pytest.raises(PermissionError):
+            retry_on_lock(locked, attempts=3, sleep=lambda s: None)
+
+    def test_other_errors_are_not_retried(self):
+        calls = []
+
+        def broken():
+            calls.append(1)
+            raise ValueError("bad data")
+
+        with pytest.raises(ValueError):
+            retry_on_lock(broken, sleep=lambda s: None)
+        assert len(calls) == 1
+
+    def test_snapshot_widening_survives_a_brief_lock(self, tmp_path, monkeypatch):
+        """The META run of 2026-10-25 lost its snapshot to exactly this."""
+        import csv
+        import os
+        from types import SimpleNamespace
+
+        from agents import signal_snapshots
+
+        path = tmp_path / "signals.csv"
+        old = list(signal_snapshots.COLUMNS[:33])
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            csv.writer(fh).writerows([old, ["2026-10-21T21:58:00+00:00", "IBRX"]
+                                      + [""] * 31])
+        real_replace, refusals = os.replace, [2]
+
+        def replace_once_locked(src, dst):
+            if refusals[0]:
+                refusals[0] -= 1
+                raise PermissionError(5, "Toegang geweigerd")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", replace_once_locked)
+        monkeypatch.setattr("common.files.time.sleep", lambda s: None)
+        report = SimpleNamespace(symbol="META", verdict="mixed", score=0.08, confidence=1.0,
+                                 technical=None, fundamental=None, sentiment=None,
+                                 insider=None, flows=None, model_version="3.0.0")
+        signal_snapshots.record(report, path, store_dir=tmp_path / "long")
+        rows = signal_snapshots.load_rows(path, store_dir=tmp_path / "long")
+        assert [r["symbol"] for r in rows] == ["IBRX", "META"]
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["signals.csv"]  # no temp left
 
 
 def test_pandas_writes_through_the_helper(tmp_path):

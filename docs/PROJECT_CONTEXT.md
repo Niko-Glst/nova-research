@@ -76,8 +76,44 @@ code (see section 8).
   `pyarrow` (the parquet snapshot store; without it runs are recorded in CSV and
   the store-based steps say so). No statsmodels, matplotlib, vectorbt or
   pandas-ta. This is deliberate (section 8).
-- 760 tests (`pytest`), all offline: 758 pass, 2 are skipped until pyarrow is
-  installed (2026-10-25).
+- 849 tests (`pytest`), all offline: 847 pass, 2 are skipped until pyarrow is
+  installed (2026-11-02).
+- Model 4.0.0, currency fix (2026-11-02, `agents/currency.py`): Yahoo divides a
+  market cap in the quote currency by revenue in the reporting currency without
+  converting. Price/sales is now recomputed wherever the two differ, price/book
+  for local listings (for US-listed foreign shares it stays Yahoo's, with a
+  note; TSMC's looks wrong). P/E is right as given: EPS is in the quote currency.
+  The mega-cap test runs in dollars (Toyota's yen no longer pass $500B). Amounts
+  show their own currency. Tel Aviv has a benchmark (TA-125).
+- Repo audit (2026-11-02, owner's go): removed the three stub agents, the broker
+  guard (no broker exists), `backtests/signal_study.py` and its script (stances
+  of today against past returns, replaced by the point-in-time record), the unused
+  pre-commit config (its baseline never existed; the plain hook does the scanning),
+  and loose dead lines. Wired into every report: `risk_manager` and
+  `allocation_decision` through `agents/risk_read.py`, peer correlations through
+  `correlations.load_returns`. With `--simulate`: the `thesis_signals` and
+  `donchian_breakout` rules beside the others. Now shown as well: insider trades one
+  by one, simulated drawdowns, the stop of an open trade, and SWOT, backtests and
+  odds in the text report. Scores are unchanged, so the model stays 4.0.0.
+- Usage audit (2026-10-29, owner's go): removed 17 functions nothing called
+  (and the 4 tests that only exercised them), the unused NEWS_API_KEY and
+  LOG_LEVEL settings, the example.com `rss_feeds` placeholder, and the empty
+  `notebooks/`, `data/raw/`, `data/processed/` folders. Kept on purpose: the
+  broker sandbox guard (SECURITY.md), the Kendall reference implementation the
+  tests check the fast one against, and -- pending the owner's decision -- the
+  unwired `risk_manager.assess` / `allocation_decision.size_position` and the
+  three placeholder agents. The position-trading rule now builds its weekly
+  swing state once per confirmation (identical output, about 10x faster).
+- Backtest engine fix (2026-10-28): the trade list reported each trade at the
+  close one day after the one the equity curve used, so trades did not add up to
+  the total. Equity was right (signal traded at its own close, earning the moves
+  after it, as in the walk-forward study); the trade list now matches it.
+- News search by company name (2026-10-28): when Finnhub, Tiingo and the ticker's
+  Yahoo feed are empty, `news_sources.fetch_yfinance_search_news` searches by name
+  and keeps headlines Yahoo tags with the ticker or that name the company. Reddit
+  searches `"<name>" OR <root>` when the root has 3+ letters (config
+  `name_search`). BESI.AS: 0 -> 20 articles; Reddit still finds almost nothing in
+  the three allowlisted (US-centred) subreddits.
 
 ---
 
@@ -89,7 +125,6 @@ code (see section 8).
 .venv\Scripts\python.exe research.py SU.PA --html --no-open      # write without opening a browser
 .venv\Scripts\python.exe research.py AAPL --json > report.json   # machine-readable
 .venv\Scripts\python.exe serve.py                                # web UI on 127.0.0.1:8000
-.venv\Scripts\python.exe scripts/run_signal_study.py             # do the stances relate to returns?
 .venv\Scripts\python.exe -m pytest -q
 ```
 
@@ -102,6 +137,7 @@ Scoring history (model 2.0.0 onward):
 .venv\Scripts\python.exe history.py backtest --from-sources    # same, recomputed in memory (no store)
 .venv\Scripts\python.exe history.py breadth-backtest           # RSP/SPY regime against what followed
 .venv\Scripts\python.exe history.py implied-move-study         # S&P moves vs VIX/16 since 1990
+.venv\Scripts\python.exe history.py settle                     # recorded verdicts vs local index
 .venv\Scripts\python.exe scripts/migrate_snapshots_to_long.py  # one-time CSV -> parquet, round-trip checked
 ```
 
@@ -233,8 +269,8 @@ volatility ratio as a continuous `-clip(z, -1, 1)`. Buyback flags:
 `unknown` (no cash-flow line; share count still scores), `data_conflict`
 (left out). Tax withholding never counts as a buyback.
 
-The weights were chosen by argument, not fitted. `backtests/signal_study.py`
-regressed stances on returns across 24 symbols. Technical correlated (r 0.72,
+The weights were chosen by argument, not fitted. A study (removed 2026-11-02, in
+the git history) regressed stances on returns across 24 symbols. Technical correlated (r 0.72,
 p 0.0001), fundamental weakly (0.45, p 0.03), and insider and sentiment showed
 no significant relationship. The weights were left unchanged because stances
 are current-data snapshots paired with past returns (association, not
@@ -260,6 +296,9 @@ it, because their inputs were never recorded historically.
 | `sec_edgar` | `cik_for`, `company_facts`, `latest_annual_report(facts, as_of)` | `AnnualReport(accn, filed, shares_end, shares_prior, repurchased, issued, net_issuance)` | SEC companyfacts, User-Agent from `SEC_USER_AGENT`, under 10 req/s, cached (`data/cache/sec`), point in time by filing date, original 10-K not amendments. |
 | `breadth_analyst` | `analyze(symbol, sector=None, market_cap=None)` | `BreadthRead(signal, score, group, regime, reasons, history)` | RSP/SPY regime (section 4). `regime_from_ratio` is pure and point in time; `trend_line` fits the 63-day line. |
 | `implied_move` | `analyze(now=None)` | `MarketMove(session, move, implied, multiple, tier, partial, next_day_implied, recent, base)` | Added 2026-10-25, shown not scored. The S&P 500's last move against VIX/sqrt(252) at the previous close ("VIX/16"). Tiers (owner): within 1x noise, 1x-2x notable, a drop beyond 2x "assumptions may have changed" (`assumptions_changed`; up-moves never set it). VIX1D shown alongside. Base rates from cached 1990+ history. `history.py implied-move-study` holds the evidence: moves beyond 1x on ~9% of down sessions (VIX overstates the move, realised ~86% of implied); after a drop beyond 2x, another big move within 5 sessions ~17% vs ~7%, and next-month realised vol up to VIX. No change in forward direction. |
+| `position_strategy` | `run(symbol, history)`, `position_signals(ohlc)`, `levels(ohlc)` | `PositionBacktest` | Added 2026-10-28 (owner, after ThinkMarkets' position-trading guide). Pullback in an uptrend, entered only when all hold: close > 200-day and 50 > 200; close in the 50-61.8% retracement of the last weekly up-leg; support (weekly swing low or 100/200-day) within 2% below; Bollinger 20/2: a close at or below the lower band in the last 10 sessions and back inside now (owner's addition 2026-10-29, not in the guide); MACD over its signal or RSI back above 50 within 10 sessions of that setup, with the close not below the 61.8% level. Exit below the stop (leg's swing low, raised to each higher confirmed weekly swing low) or the 200-day. Weekly swings count only once their 2 confirming weeks have closed. In the report with --simulate, next to the crossover, with Monte Carlo, trades and how often each condition held. Very selective: META 1 trade in 5 years. |
+| `benchmarks` | `benchmark_for(symbol)` | `str \| None` | Added 2026-10-28 (owner, after comparing with TradingAgents). The listing's local price index by Yahoo suffix, from `config/scoring.yaml` `benchmarks` (17 markets; Oslo left out, Yahoo serves one row). One-letter unconfigured suffixes (BRK.B) count as US. |
+| `track_record` | `for_symbol(symbol)`, `settle(rows, prices)`, `summary(calls)` | `list[SettledCall]` | Added 2026-10-28. Each recorded verdict settled from the first close dated after the run's UTC day, against the local index, over 1W/1M/3M/6M sessions. Repeat runs with the same entry count once (last run wins). Positive is right when the stock beat its index, negative when it trailed, mixed takes no side. Shown in each report ("Past calls on this ticker") and by `history.py settle`; never scored. Price indices exclude dividends (stated). |
 | `flow_evidence` | `evidence_lines(flows, reference)`, `breadth_line(breadth)`, `market_move_line(mm)` | `list[str]` | Inputs, not verdicts: they never change the thesis or SWOT conclusions. The issuance rank needs the SEC backfill in the store; without it the line says so. |
 | `insider_analyst` | `analyze(symbol, lookback_days=180)` | `InsiderRead` | Form 4 via yfinance. Grants and option exercises are excluded; only open-market buys and sells count. **US filers only**: non-US names return `unknown`. |
 | `thesis` | `build_thesis(...)` | `Thesis(conditions, breaks_if)` | "What must be true": each condition is met, unmet or unknown, with the current reading. Never a buy/sell instruction. |
@@ -283,8 +322,7 @@ it, because their inputs were never recorded historically.
 | `backtest_engine` | `run_backtest(price_history, entries, exits, fees_bps, symbol, shift_signals=True)` | Would a rule have worked? Long-only, signals lagged one bar, fees on both sides, buy-and-hold always reported alongside. |
 | `monte_carlo` | `run_monte_carlo(symbol, returns, num_simulations, horizon_days, method="block", ...)` | How much of a backtest result was luck? Block bootstrap preserves volatility clustering. |
 | `outcome_distribution` | `build_distribution(symbol, price_history, horizon_days=252, num_simulations=5000, seed=42)` | P(return > X), P(drawdown > X) over a horizon, **split by volatility regime** (calm vs volatile, split at the symbol's own 67th percentile of 21-day realised vol). |
-| `regression` | `fit_ols(...)`, **`correlate(x, y, name)`** | OLS with t/F p-values and Pearson r with a t-based p-value. Implemented without scipy and checked against published tables to 4 decimals. `SIGNIFICANCE_LEVEL = 0.05`. |
-| `signal_study` | `study_signals(...)` | Do analyst stances relate to realised returns? |
+| `regression` | **`correlate(x, y, name)`** | Pearson r with a t-based p-value. Implemented without scipy and checked against published tables to within 0.001. `SIGNIFICANCE_LEVEL = 0.05`. |
 
 ### Portfolio-side (`agents/`)
 
@@ -292,6 +330,7 @@ it, because their inputs were never recorded historically.
 |---|---|---|
 | `risk_manager` | `assess(symbol, candidate_returns, portfolio_returns=None, max_correlation=0.85, min_sharpe=0.0)` | **Correlation of a candidate to an equal-weighted portfolio aggregate** plus Sharpe/Sortino. Rejects with a stated reason. Also `compute_correlation()` and `compute_risk_adjusted_metrics()`. |
 | `allocation_decision` | `size_position(symbol, conviction, risk_assessment, portfolio_equity, method=...)` | Fixed-fractional, volatility-target (default) or half-Kelly sizing, clipped and reduced for correlation to the book. Simulation only. |
+| `risk_read` | `analyze(symbol, score, peers=())` | Both of the above in every report, shown and never scored. The local index stands in for the book; conviction is the score when positive. Returns from `correlations.load_returns`, local currency, 5 years (`risk_read` in `config/scoring.yaml`). |
 | `strategy_agent` | `moving_average_crossover`, `donchian_breakout`, `thesis_signals` | Boolean entry/exit Series for the backtester. |
 
 ### Output
@@ -301,11 +340,6 @@ it, because their inputs were never recorded historically.
 | `html_report.render_report(report, generated_at)` | One self-contained HTML file: inline CSS, inline SVG charts (`charts.py`), no CDN, no network calls at view time. External text is HTML-escaped. |
 | `report_archive.save_report(report, directory="reports")` | Writes `reports/<SYM>.html` (latest), `reports/archive/<SYM>_<YYYY-MM-DD_HHMM>.html` (never overwritten), and rebuilds `reports/index.html` (every run per ticker: verdict, score, change vs previous run, confidence). The index is rebuilt by parsing the archived files, so it cannot drift from disk. |
 | `serve.py` | stdlib `http.server` + Server-Sent Events progress. Binds to **127.0.0.1 only**. |
-
-### Stubs (raise `NotImplementedError`)
-
-`investor_board` (archetype personas, never real investors), `narrative_synth`,
-`podcast_summarizer`.
 
 ### Correlation analysis (`correlations/`, entry point `correlation.py`)
 
@@ -354,7 +388,7 @@ the same data they are now chosen on, and the gaps are 1-2%.
   `peer_groups` (keyed on normalised yfinance industry label),
   `default_peers_by_sector`, `max_peers: 6`.
 - `config/settings.py`: `load_allowed_sources()`, credential getters (raise if
-  unset), `get_broker_sandbox_credentials()` (rejects non-sandbox URLs).
+  unset).
 - `common/rate_limit.py`: `get_limiter("yfinance").wait()`. One shared,
   thread-safe limiter per provider name; interval from config (2 s).
 
@@ -477,10 +511,10 @@ data.convention    # the currency convention, to print next to any figure
 
 ## 8. Conventions to keep
 
-- **Research only.** No module places orders. `get_broker_sandbox_credentials()`
-  refuses live endpoints. `serve.py` binds to localhost only.
-- **Secrets:** `.env` only (gitignored), never in code or config. Pre-commit
-  runs `detect-secrets`. `.claudeignore` mirrors `.gitignore` for sensitive files.
+- **Research only.** No module places orders and there is no broker code.
+  `serve.py` binds to localhost only.
+- **Secrets:** `.env` only (gitignored), never in code or config. The hook in
+  `.git-hooks/pre-commit` scans every commit. `.claudeignore` mirrors `.gitignore` for sensitive files.
 - **Allowlisted sources only** (`config/allowed_sources.yaml`). Unlisted
   subreddits raise. New sources are added there first (SECURITY.md rule 3).
 - **Rate-limit every external call** through `common/rate_limit.py`.
@@ -522,16 +556,12 @@ data.convention    # the currency convention, to print next to any figure
   are not possible yet.
 - Sentiment has no minimum sample: one Reddit post can set the leg to bullish.
 - Insider data is US-only; no AMF/FCA/BaFin source.
-- Market cap is always printed with `$`.
-- `investor_board`, `narrative_synth` and `podcast_summarizer` are stubs.
-- No portfolio or holdings store: `risk_manager` takes a returns DataFrame
-  from the caller.
+- No portfolio or holdings store: `risk_read` uses the local index as the book.
 - Correlation walk-forward: daily returns only; one 252-day window for the
   structured estimators (shrinkage might gain more on shorter windows, not
   tested); turnover is reported but no transaction costs are charged; the
   realised target from ~21 days is noisy (rankings unbiased, levels inflated).
 - Correlation phase 4 (DCC-GARCH, Student-t copula) is not built; it needs the
   owner's OK.
-- `risk_manager` and `allocation_decision` do not use `estimate_covariance`
-  yet; wiring it in is the allocation tool's job, with the current behaviour
-  kept as the default.
+- `risk_read` reads plain daily volatility and correlation; it does not use
+  `estimate_covariance`.

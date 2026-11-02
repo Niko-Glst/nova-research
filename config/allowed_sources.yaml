@@ -49,10 +49,6 @@ news_domains:
   - globenewswire.com
   - prnewswire.com
 
-rss_feeds:
-  - name: example_macro_feed
-    url: https://example.com/rss/macro.xml  # placeholder — replace with a real, vetted feed
-
 # Official FX reference rates for the correlation module's base-currency view
 # (correlations/fred.py). Yahoo's FX history was rejected: its daily bars are
 # dated correctly until about 2010 and one day late afterwards, which no single
@@ -65,6 +61,7 @@ fred:
     - DEXUSEU   # US dollars per euro
     - DEXSZUS   # Swiss francs per US dollar
     - DEXUSUK   # US dollars per pound sterling
+    - DEXHKUS   # Hong Kong dollars per US dollar
 
 # SEC EDGAR (added 2026-10-22, owner's request): XBRL company facts for
 # point-in-time share counts and buyback/issuance cash flows of US filers. No

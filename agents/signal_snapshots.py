@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import csv
 import math
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from agents import snapshot_store
+from common.files import atomic_write, retry_on_lock
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SNAPSHOT_PATH = ROOT_DIR / "data" / "snapshots" / "signals.csv"
@@ -151,13 +151,29 @@ def _widen(path: Path, header: list[str]) -> None:
     """Rewrite with the current header, padding older rows; no value changes."""
     with path.open(newline="", encoding="utf-8") as fh:
         rows = list(csv.reader(fh))[1:]
-    temporary = path.with_suffix(".widening")
-    with temporary.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(COLUMNS)
-        for row in rows:
-            writer.writerow(row + [""] * (len(COLUMNS) - len(row)))
-    os.replace(temporary, path)
+
+    def write(temporary: Path) -> None:
+        with temporary.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(COLUMNS)
+            for row in rows:
+                writer.writerow(row + [""] * (len(COLUMNS) - len(row)))
+
+    atomic_write(path, write)  # whole or not at all; waits out a OneDrive lock
+
+
+def _append_row(path: Path, columns, row: dict[str, str] | None, header: bool) -> None:
+    """Append one CSV row (or only the header), waiting out a file briefly held by
+    OneDrive or a scanner."""
+    def append() -> None:
+        with path.open("a", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=columns)
+            if header:
+                writer.writeheader()
+            if row is not None:
+                writer.writerow(row)
+
+    retry_on_lock(append)
 
 
 def record(report, path: Path | None = None, now: datetime | None = None,
@@ -185,11 +201,8 @@ def record(report, path: Path | None = None, now: datetime | None = None,
                     f"{path} has columns this version does not recognise; not appending."
                 )
             _widen(path, header)
-    with path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=COLUMNS)
-        if new_file:
-            writer.writeheader()
-        writer.writerow({**snapshot_row(report, now), "schema_version": CSV_SCHEMA_VERSION})
+    _append_row(path, COLUMNS,
+                {**snapshot_row(report, now), "schema_version": CSV_SCHEMA_VERSION}, new_file)
     return path
 
 
@@ -229,20 +242,16 @@ def record_rescores(results, path: Path | None = None, now: datetime | None = No
     path.parent.mkdir(parents=True, exist_ok=True)
     new_file = not path.exists()
     written = 0
-    with path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=RESCORED_COLUMNS)
-        if new_file:
-            writer.writeheader()
-        for r in results:
-            if not r.rescored:
-                continue
-            writer.writerow({
-                "rescored_at": now.isoformat(timespec="seconds"), "symbol": r.symbol,
-                "recorded_at": r.recorded_at, "original_model": r.original_model,
-                "model_version": r.model_version, "score": _num(r.score),
-                "verdict": r.verdict, "flows_signal": r.flows_signal,
-            })
-            written += 1
+    for r in rescored:
+        _append_row(path, RESCORED_COLUMNS, {
+            "rescored_at": now.isoformat(timespec="seconds"), "symbol": r.symbol,
+            "recorded_at": r.recorded_at, "original_model": r.original_model,
+            "model_version": r.model_version, "score": _num(r.score),
+            "verdict": r.verdict, "flows_signal": r.flows_signal,
+        }, header=new_file and written == 0)
+        written += 1
+    if new_file and not written:  # an empty file still gets its header
+        _append_row(path, RESCORED_COLUMNS, None, header=True)
     return written
 
 

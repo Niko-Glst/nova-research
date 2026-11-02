@@ -24,18 +24,6 @@ def _esc(text: object) -> str:
     return html.escape(str(text), quote=True)
 
 
-def _nice_ceiling(value: float) -> float:
-    """Round a magnitude up to a readable axis bound (1, 2, 2.5 or 5 x 10^n)."""
-    if value <= 0 or not math.isfinite(value):
-        return 1.0
-    exponent = math.floor(math.log10(value))
-    base = value / (10**exponent)
-    for candidate in (1.0, 2.0, 2.5, 5.0, 10.0):
-        if base <= candidate:
-            return candidate * (10**exponent)
-    return 10.0 * (10**exponent)
-
-
 # --------------------------------------------------------------------------
 # EPS / peer bars
 # --------------------------------------------------------------------------

@@ -65,6 +65,26 @@ class TestBacktestMechanics:
         result = run_backtest(frame, entries, exits)
         assert result.total_return_pct == pytest.approx(0.0)
 
+    def test_trades_are_reported_at_the_signal_close(self):
+        """A signal at close d is traded at close d and earns the move after it.
+
+        The trade list once reported close d+1, a day late, so its trades did not
+        add up to the equity curve (META: one +3.5% trade against +6.9% in all).
+        """
+        frame = _frame([100.0] * 10 + [200.0, 200.0, 200.0])
+        entries, exits = _signals(frame.index, [9], [])
+        result = run_backtest(frame, entries, exits)
+        assert result.total_return_pct == pytest.approx(100.0)
+        assert result.trades[0].entry_price == 100.0
+        assert result.trades[0].entry_index == 9
+
+    def test_equity_matches_the_trade_list(self):
+        frame = _frame([100, 101, 103, 102, 106, 110, 108, 111, 115, 112, 109, 113])
+        entries, exits = _signals(frame.index, [1, 7], [4, 10])
+        result = run_backtest(frame, entries, exits)
+        compounded = np.prod([1 + t.return_pct / 100 for t in result.trades]) - 1
+        assert result.total_return_pct == pytest.approx(compounded * 100, abs=1e-9)
+
     def test_unshifted_signals_can_be_requested(self):
         frame = _frame(list(np.linspace(100, 200, 100)))
         entries, exits = _signals(frame.index, [0], [])
@@ -193,7 +213,7 @@ class TestMonteCarlo:
         assert "favourable draw" in result.summary()
 
 
-class TestOlsAgainstPublishedValues:
+class TestPValuesAgainstPublishedValues:
     """p-values checked against standard statistical tables."""
 
     @pytest.mark.parametrize(
@@ -202,77 +222,6 @@ class TestOlsAgainstPublishedValues:
     )
     def test_t_distribution_matches_tables(self, t, df, expected):
         assert reg._student_t_sf(t, df) == pytest.approx(expected, abs=0.001)
-
-    @pytest.mark.parametrize(
-        ("f", "d1", "d2", "expected"),
-        [(4.35, 1, 20, 0.05), (3.49, 2, 20, 0.05), (1.0, 5, 5, 0.5)],
-    )
-    def test_f_distribution_matches_tables(self, f, d1, d2, expected):
-        assert reg._f_distribution_sf(f, d1, d2) == pytest.approx(expected, abs=0.001)
-
-    def test_perfect_fit_recovers_exact_coefficients(self):
-        x = np.arange(20, dtype=float)
-        result = reg.fit_ols(x, 3.0 + 2.0 * x, ["x"])
-        assert result.r_squared == pytest.approx(1.0)
-        assert result.coefficients[0].value == pytest.approx(3.0)
-        assert result.coefficients[1].value == pytest.approx(2.0)
-
-    def test_known_slope_is_recovered_from_noisy_data(self):
-        rng = np.random.default_rng(0)
-        x = rng.normal(0, 1, 300)
-        y = 1.5 + 0.8 * x + rng.normal(0, 1, 300)
-        result = reg.fit_ols(x, y, ["x"])
-        assert result.coefficients[1].value == pytest.approx(0.8, abs=0.15)
-        assert result.coefficients[1].is_significant
-
-    def test_pure_noise_is_not_significant(self):
-        """The most important property: no signal must not look like signal."""
-        rng = np.random.default_rng(3)
-        x = rng.normal(0, 1, 200)
-        y = rng.normal(0, 1, 200)
-        result = reg.fit_ols(x, y, ["x"])
-        assert not result.coefficients[1].is_significant
-
-    def test_r_squared_is_bounded(self):
-        rng = np.random.default_rng(4)
-        x = rng.normal(0, 1, 100)
-        y = rng.normal(0, 1, 100)
-        result = reg.fit_ols(x, y, ["x"])
-        assert 0.0 <= result.r_squared <= 1.0
-
-    def test_rows_with_nan_are_dropped(self):
-        x = np.array([1.0, 2.0, np.nan, 4.0, 5.0, 6.0])
-        y = np.array([2.0, 4.0, 6.0, 8.0, 10.0, 12.0])
-        result = reg.fit_ols(x, y, ["x"])
-        assert result.n_observations == 5
-
-    def test_underpowered_fit_is_flagged(self):
-        x = np.array([1.0, 2.0, 3.0, 4.0])
-        y = np.array([2.0, 4.1, 5.9, 8.2])
-        assert reg.fit_ols(x, y, ["x"]).is_underpowered
-
-    def test_summary_always_carries_the_caveat(self):
-        rng = np.random.default_rng(5)
-        x = rng.normal(0, 1, 200)
-        result = reg.fit_ols(x, 2 * x + rng.normal(0, 1, 200), ["x"])
-        assert "not evidence" in result.summary()
-
-    def test_too_few_observations_rejected(self):
-        with pytest.raises(ValueError, match="Not enough observations"):
-            reg.fit_ols(np.array([1.0, 2.0]), np.array([1.0, 2.0]), ["x"])
-
-    def test_multiple_predictors(self):
-        rng = np.random.default_rng(6)
-        x1 = rng.normal(0, 1, 200)
-        x2 = rng.normal(0, 1, 200)
-        y = 1.0 + 2.0 * x1 - 1.0 * x2 + rng.normal(0, 0.5, 200)
-        result = reg.fit_ols(np.column_stack([x1, x2]), y, ["x1", "x2"])
-        assert result.coefficients[1].value == pytest.approx(2.0, abs=0.2)
-        assert result.coefficients[2].value == pytest.approx(-1.0, abs=0.2)
-
-    def test_mismatched_lengths_rejected(self):
-        with pytest.raises(ValueError, match="rows"):
-            reg.fit_ols(np.arange(10.0), np.arange(5.0), ["x"])
 
 
 class TestCorrelation:

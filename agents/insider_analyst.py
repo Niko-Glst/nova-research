@@ -94,6 +94,12 @@ class InsiderRead:
     notes: str = ""
     reasons: list[str] = field(default_factory=list)
 
+    @property
+    def open_market_trades(self) -> list[InsiderTransaction]:
+        """The buys and sells behind the signal, newest first; grants are pay."""
+        trades = [t for t in self.transactions if t.category in (BUY, SELL)]
+        return sorted(trades, key=lambda t: (t.date is not None, t.date), reverse=True)
+
 
 def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(p, text) for p in patterns)

@@ -40,10 +40,6 @@ REQUEST_TIMEOUT_SECONDS = 20
 MAX_ATTEMPTS = 3
 
 
-def is_fred_symbol(symbol: str) -> bool:
-    return symbol.upper().startswith(PREFIX)
-
-
 def fetch_fred_series(symbol: str, period: str = "max") -> pd.DataFrame:
     """Fetch one allowlisted FRED series as a DataFrame with a `Close` column.
 

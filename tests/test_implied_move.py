@@ -86,7 +86,7 @@ class TestReading:
     def test_drop_beyond_two_x_changes_the_assumptions(self):
         close, vol = _series([0.002] * 30 + [-0.025])
         mm = im.reading(im.move_table(close, vol))
-        assert (mm.tier, mm.direction, mm.assumptions_changed) == (im.BEYOND, "down", True)
+        assert (mm.tier, mm.assumptions_changed) == (im.BEYOND, True)
         assert "assumptions may have changed" in mm.describe()
         assert mm.recent_beyond_drops == [mm.session] and len(mm.recent) == im.RECENT_SESSIONS
 

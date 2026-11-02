@@ -11,7 +11,6 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import urlparse
 
 import yaml
 from dotenv import load_dotenv
@@ -21,21 +20,12 @@ ALLOWED_SOURCES_PATH = ROOT_DIR / "config" / "allowed_sources.yaml"
 
 load_dotenv(ROOT_DIR / ".env")
 
-# Substrings that mark a broker base_url as a paper/sandbox endpoint. A URL must
-# match one of these to be accepted (see SECURITY.md rule 2 — no live execution).
-_SANDBOX_URL_MARKERS = ("paper", "sandbox", "demo", "test", "localhost", "127.0.0.1")
-
 
 @dataclass(frozen=True)
 class RedditCredentials:
     client_id: str
     client_secret: str
     user_agent: str
-
-
-@dataclass(frozen=True)
-class NewsApiCredentials:
-    api_key: str
 
 
 @dataclass(frozen=True)
@@ -54,18 +44,6 @@ class FinnhubCredentials:
     """Credentials for Finnhub's company-news endpoint (https://finnhub.io)."""
 
     api_key: str
-
-
-@dataclass(frozen=True)
-class BrokerSandboxCredentials:
-    """Credentials for a paper/sandbox broker endpoint only.
-
-    base_url must never point at a live-trading endpoint (see SECURITY.md).
-    """
-
-    api_key: str
-    api_secret: str
-    base_url: str
 
 
 def _require_env(name: str) -> str:
@@ -88,11 +66,6 @@ def get_reddit_credentials() -> RedditCredentials:
     )
 
 
-def get_news_api_credentials() -> NewsApiCredentials:
-    """Read news API credentials from the environment."""
-    return NewsApiCredentials(api_key=_require_env("NEWS_API_KEY"))
-
-
 def get_tiingo_credentials() -> TiingoCredentials:
     """Read Tiingo API credentials from the environment."""
     return TiingoCredentials(api_key=_require_env("TIINGO_API_KEY"))
@@ -101,30 +74,6 @@ def get_tiingo_credentials() -> TiingoCredentials:
 def get_finnhub_credentials() -> FinnhubCredentials:
     """Read Finnhub API credentials from the environment."""
     return FinnhubCredentials(api_key=_require_env("FINNHUB_API_KEY"))
-
-
-def get_broker_sandbox_credentials() -> BrokerSandboxCredentials:
-    """Read paper/sandbox broker credentials from the environment.
-
-    Rejects any base_url that does not look like a paper/sandbox endpoint.
-    """
-    base_url = _require_env("BROKER_BASE_URL")
-    parsed = urlparse(base_url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError(
-            f"BROKER_BASE_URL must be an absolute http(s) URL, got {base_url!r}."
-        )
-    if not any(marker in base_url.lower() for marker in _SANDBOX_URL_MARKERS):
-        raise ValueError(
-            f"Refusing to use BROKER_BASE_URL {base_url!r}: it does not look like a "
-            f"paper/sandbox endpoint (expected one of {_SANDBOX_URL_MARKERS} in the URL). "
-            f"This project is simulation-only — see SECURITY.md."
-        )
-    return BrokerSandboxCredentials(
-        api_key=_require_env("BROKER_API_KEY"),
-        api_secret=_require_env("BROKER_API_SECRET"),
-        base_url=base_url,
-    )
 
 
 @lru_cache(maxsize=1)
@@ -163,8 +112,11 @@ def load_scoring_config() -> dict:
 
 
 def get_sec_user_agent() -> str:
-    """User-Agent for SEC EDGAR: SEC asks for a descriptive name and a contact email."""
-    return _require_env("SEC_USER_AGENT")
+    """User-Agent for SEC EDGAR: SEC asks for a descriptive name and a contact email.
+
+    The variable's name is config/scoring.yaml flows.sec.user_agent_env.
+    """
+    return _require_env(str(load_scoring_config()["flows"]["sec"]["user_agent_env"]))
 
 
 def get_rate_limits() -> dict[str, float]:
@@ -176,8 +128,3 @@ def get_rate_limits() -> dict[str, float]:
             limits.get("min_seconds_between_requests", 2)
         ),
     }
-
-
-def get_log_level() -> str:
-    """Return the configured log level (defaults to INFO)."""
-    return os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
