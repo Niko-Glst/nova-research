@@ -12,7 +12,7 @@ python serve.py              # web UI at localhost:8000
 python research.py NVDA --html --simulate    # or straight from the CLI
 ```
 
-<sub>Python 3.12 · ~22,400 lines · 879 tests · 8 runtime dependencies</sub>
+<sub>Python 3.12 · ~22,400 lines · 881 tests · 8 runtime dependencies</sub>
 
 ---
 
@@ -231,7 +231,7 @@ Defined in [SECURITY.md](SECURITY.md) and enforced in code:
 
 ## Engineering notes
 
-**879 tests, ~8,000 lines of test code, none of them online.** Statistical functions are checked
+**881 tests, ~8,000 lines of test code, none of them online.** Statistical functions are checked
 against published tables; indicator maths against synthetic series with known
 properties. Several tests are explicit regressions for bugs that only appeared
 against live data:

@@ -73,9 +73,9 @@ def _require_pyarrow() -> None:
                                f"To fix, run (from any folder): {PYARROW_FIX}")
 
 
-def active(store_dir: Path = STORE_DIR) -> bool:
+def active(store_dir: Path | None = None) -> bool:
     """True once the CSV history has been migrated into this store."""
-    return (Path(store_dir) / MARKER_NAME).exists()
+    return (Path(store_dir or STORE_DIR) / MARKER_NAME).exists()
 
 
 def wide_to_long(
@@ -113,13 +113,13 @@ def long_to_wide(frame: pd.DataFrame) -> list[dict[str, str]]:
     return sorted(out, key=lambda r: r["recorded_at"])
 
 
-def append(frame: pd.DataFrame, store_dir: Path = STORE_DIR) -> Path:
+def append(frame: pd.DataFrame, store_dir: Path | None = None) -> Path:
     """Write `frame` as a new part file; never touches existing parts."""
     _require_pyarrow()
     missing = set(LONG_COLUMNS) - set(frame.columns)
     if missing:
         raise ValueError(f"Long rows are missing columns: {sorted(missing)}")
-    store_dir = Path(store_dir)
+    store_dir = Path(store_dir or STORE_DIR)
     store_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     path = store_dir / f"part-{stamp}-{uuid.uuid4().hex[:8]}.parquet"
@@ -130,9 +130,9 @@ def append(frame: pd.DataFrame, store_dir: Path = STORE_DIR) -> Path:
     return path
 
 
-def load(store_dir: Path = STORE_DIR, source: str | None = None) -> pd.DataFrame:
+def load(store_dir: Path | None = None, source: str | None = None) -> pd.DataFrame:
     """Every part, concatenated in write order (optionally one source)."""
-    store_dir = Path(store_dir)
+    store_dir = Path(store_dir or STORE_DIR)
     parts = sorted(store_dir.glob("part-*.parquet")) if store_dir.exists() else []
     if not parts:
         return pd.DataFrame(columns=list(LONG_COLUMNS))

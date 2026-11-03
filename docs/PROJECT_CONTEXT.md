@@ -76,7 +76,8 @@ code (see section 8).
   `pyarrow` (the parquet snapshot store; without it runs are recorded in CSV and
   the store-based steps say so). No statsmodels, matplotlib, vectorbt or
   pandas-ta. This is deliberate (section 8).
-- 879 tests (`pytest`), all offline: all pass with pyarrow installed; without it
+- 881 tests (`pytest`), all offline and each with its own empty signal history
+  (`tests/conftest.py`): all pass with pyarrow installed; without it
   2 are skipped (2026-11-03).
 - Model 4.0.0, currency fix (2026-11-02, `agents/currency.py`): Yahoo divides a
   market cap in the quote currency by revenue in the reporting currency without

@@ -47,6 +47,25 @@ def _report():
                            flows=None, model_version="2.0.0")
 
 
+class TestTheRealHistoryIsOutOfReach:
+    def test_every_default_location_is_temporary(self, tmp_path):
+        for path in (snapshot_store.STORE_DIR, signal_snapshots.SNAPSHOT_PATH,
+                     signal_snapshots.RESCORED_PATH):
+            assert path.is_relative_to(tmp_path)
+
+    @needs_pyarrow
+    def test_a_recorded_run_lands_there_even_in_an_active_store(self, tmp_path):
+        """The bug this guards against: a test wrote TEST rows into the migrated store."""
+        store = snapshot_store.STORE_DIR
+        store.mkdir()
+        (store / snapshot_store.MARKER_NAME).write_text("{}", encoding="utf-8")
+        assert snapshot_store.active()
+        signal_snapshots.record(_report(), tmp_path / "ignored.csv", NOW)
+        assert len(list(store.glob("part-*.parquet"))) == 1
+        assert [r["symbol"] for r in signal_snapshots.load_rows()] == ["IBRX"]
+        assert not snapshot_store.load().empty
+
+
 class TestNanNotZero:
     def test_widened_columns_load_as_nan(self, tmp_path):
         path = tmp_path / "signals.csv"
