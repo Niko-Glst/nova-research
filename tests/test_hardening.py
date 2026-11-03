@@ -98,7 +98,8 @@ class TestServerFileWrites:
 
         monkeypatch.setattr(serve.report_archive, "save_report", broken)
         monkeypatch.setattr(serve.signal_snapshots, "record", broken)
-        serve._write_report_file(SimpleNamespace(symbol="TEST"))
+        peers = SimpleNamespace(peer_comparison=SimpleNamespace(verdict="cheap"))
+        serve._write_report_file(SimpleNamespace(symbol="TEST", fundamental=peers))
         err = capsys.readouterr().err
         assert "report file not saved" in err and "signal snapshot not saved" in err
 
@@ -117,7 +118,8 @@ class TestServerFileWrites:
         monkeypatch.setattr(serve.report_archive, "save_report", slow_save)
         monkeypatch.setattr(serve.signal_snapshots, "record", lambda report: None)
         threads = [threading.Thread(target=serve._write_report_file,
-                                    args=(SimpleNamespace(symbol=f"T{i}"),)) for i in range(4)]
+                                    args=(SimpleNamespace(symbol=f"T{i}", fundamental=None),))
+                   for i in range(4)]
         for t in threads:
             t.start()
         for t in threads:

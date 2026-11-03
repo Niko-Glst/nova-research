@@ -176,6 +176,16 @@ def _append_row(path: Path, columns, row: dict[str, str] | None, header: bool) -
     retry_on_lock(append)
 
 
+def has_peer_read(report) -> bool:
+    """Whether a peer comparison judged the price, which a track-record run needs.
+
+    Without one the fundamental stance rests on quality alone and can read
+    "undervalued" at any price, so the verdict is not comparable with a full run.
+    """
+    peers = report.fundamental.peer_comparison if report.fundamental is not None else None
+    return peers is not None and peers.verdict != "unknown"
+
+
 def record(report, path: Path | None = None, now: datetime | None = None,
            store_dir: Path | None = None) -> Path:
     """Append this report to the long store once migrated, else to the wide CSV.

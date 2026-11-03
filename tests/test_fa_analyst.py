@@ -7,6 +7,89 @@ import pytest
 from agents import fa_analyst as fa
 
 
+@pytest.fixture(autouse=True)
+def custom_peers_file(tmp_path, monkeypatch):
+    """Keep the tests away from the real choices in config/custom_peers.yaml."""
+    path = tmp_path / "custom_peers.yaml"
+    monkeypatch.setattr(fa, "CUSTOM_PEERS_PATH", path)
+    return path
+
+
+class TestCustomPeers:
+    METRICS = {"_sector": "Healthcare", "_industry": "No Such Industry", "price_to_sales": 2.0}
+
+    @pytest.fixture
+    def fetched(self, monkeypatch):
+        """Offline peers, and the tickers that were looked up."""
+        calls = []
+
+        def fetch(symbol):
+            calls.append(symbol)
+            return {"price_to_sales": 4.0}
+
+        monkeypatch.setattr(fa, "fetch_fundamentals", fetch)
+        return calls
+
+    def test_no_file_means_no_choices(self):
+        assert fa.load_custom_peers() == {}
+
+    def test_saving_keeps_the_other_companies_and_the_header(self, custom_peers_file):
+        fa.save_custom_peers("aaa", ["BBB", "NO"])  # NO must not come back as False
+        fa.save_custom_peers("CCC", ["DDD"])
+        assert fa.load_custom_peers() == {"AAA": ["BBB", "NO"], "CCC": ["DDD"]}
+        assert custom_peers_file.read_text(encoding="utf-8").startswith("# Peers chosen")
+
+    def test_the_shipped_file_loads_empty(self, monkeypatch):
+        monkeypatch.setattr(fa, "CUSTOM_PEERS_PATH", fa.ROOT_DIR / "config" / "custom_peers.yaml")
+        assert isinstance(fa.load_custom_peers(), dict)
+
+    def test_a_malformed_file_says_how_it_should_look(self, custom_peers_file):
+        custom_peers_file.write_text("AAA: BBB\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="SYMBOL"):
+            fa.load_custom_peers()
+
+    def test_chosen_peers_go_before_the_sector_and_are_not_asked_again(self, fetched):
+        fa.save_custom_peers("XYZ", ["XYZ", "PEER"])
+        asked = []
+        result = fa.compare_to_peers("XYZ", self.METRICS, lambda *a: asked.append(a))
+        assert not asked and fetched == ["PEER"]
+        assert result.is_custom and not result.is_sector_fallback
+        assert result.niche == "No Such Industry" and "chosen" in result.notes
+
+    def test_chosen_peers_go_before_a_declared_group(self, fetched):
+        fa.save_custom_peers("XYZ", ["PEER"])
+        fa.compare_to_peers("XYZ", {"_sector": "Technology", "_industry": "Semiconductors"})
+        assert fetched == ["PEER"]
+
+    def test_a_company_on_the_sector_list_is_asked_and_the_answer_is_used(self, fetched):
+        asked = []
+
+        def ask(symbol, niche, suggested):
+            asked.append((symbol, niche, bool(suggested)))
+            return ["PEER"]
+
+        result = fa.compare_to_peers("XYZ", self.METRICS, ask)
+        assert asked == [("XYZ", "Healthcare", True)]
+        assert fetched == ["PEER"] and result.is_custom and result.verdict == "cheap"
+
+    def test_no_answer_keeps_the_sector(self, fetched):
+        result = fa.compare_to_peers("XYZ", self.METRICS, lambda *a: None)
+        assert result.is_sector_fallback and not result.is_custom and result.peers_used
+
+    def test_a_company_without_any_peers_is_asked_too(self, fetched):
+        metrics = {"_sector": "Nonexistent", "_industry": "Nonexistent"}
+        asked = []
+        result = fa.compare_to_peers("XYZ", metrics, lambda *a: asked.append(a))
+        assert asked == [("XYZ", "Nonexistent", [])]
+        assert result.verdict == "unknown" and "custom_peers.yaml" in result.notes
+
+    def test_a_company_with_its_own_group_is_not_asked(self, fetched):
+        asked = []
+        fa.compare_to_peers("XYZ", {"_sector": "Technology", "_industry": "Semiconductors"},
+                            lambda *a: asked.append(a))
+        assert not asked
+
+
 class TestNormalizeKey:
     @pytest.mark.parametrize(
         ("label", "expected"),

@@ -6,21 +6,32 @@ that compares valuation against peers in the same niche. A P/E of 36 means
 nothing on its own -- it only becomes a signal next to what the rest of the
 industry trades at, which is what `compare_to_peers` provides.
 
-Peer groups are declared in config/allowed_sources.yaml under `peer_groups`.
+Peer groups are declared in config/allowed_sources.yaml under `peer_groups`;
+peers chosen for one company live in config/custom_peers.yaml and go first.
 Research output only -- nothing here places an order.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from statistics import median
 
+import yaml
 import yfinance as yf
 
 from agents import currency
+from common.files import atomic_write_text
 from common.rate_limit import get_limiter
-from config.settings import load_allowed_sources
+from config.settings import ROOT_DIR, load_allowed_sources
+
+CUSTOM_PEERS_PATH = ROOT_DIR / "config" / "custom_peers.yaml"
+_CUSTOM_PEERS_HEADER = (
+    "# Peers chosen per company, written by research.py when it asks in the terminal.\n"
+    "# They go before the groups in allowed_sources.yaml. Edit or remove a line by hand\n"
+    "# to change a choice. Comments below this header are lost when research.py saves.\n\n"
+)
 
 # Raw yfinance `info` keys this module reads, mapped to the names used downstream.
 _RAW_FIELDS = {
@@ -78,6 +89,7 @@ class PeerComparison:
     # median: {metric: {ticker: value}}. The subject's own value lives in
     # symbol_metrics, not here. Defaulted, so it must follow the required fields.
     peer_values: dict[str, dict[str, float]] = field(default_factory=dict)
+    is_custom: bool = False  # True when the peers were chosen for this company
 
 
 @dataclass(frozen=True)
@@ -287,6 +299,29 @@ def compute_ratios(fundamentals: dict[str, float]) -> dict[str, float]:
     return derived
 
 
+def max_peers() -> int:
+    """How many peers one comparison fetches; each costs a rate-limited request."""
+    return int(load_allowed_sources().get("max_peers", 6))
+
+
+def load_custom_peers() -> dict[str, list[str]]:
+    """The peers chosen per company in config/custom_peers.yaml; {} when there are none."""
+    if not CUSTOM_PEERS_PATH.exists():
+        return {}
+    with CUSTOM_PEERS_PATH.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    if not isinstance(data, dict) or not all(isinstance(v, list) for v in data.values()):
+        raise ValueError(f"{CUSTOM_PEERS_PATH} must list peers per company: `SYMBOL: [A, B]`.")
+    return {str(k).upper(): [str(p).upper() for p in v] for k, v in data.items()}
+
+
+def save_custom_peers(symbol: str, peers: list[str]) -> None:
+    """Remember the peers for one company, keeping those of the others."""
+    chosen = {**load_custom_peers(), symbol.strip().upper(): list(peers)}
+    atomic_write_text(CUSTOM_PEERS_PATH, _CUSTOM_PEERS_HEADER
+                      + yaml.safe_dump(chosen, default_flow_style=None))
+
+
 def _resolve_peers(symbol: str, sector: str, industry: str) -> tuple[list[str], str, bool]:
     """Find the peer tickers for a symbol.
 
@@ -296,7 +331,6 @@ def _resolve_peers(symbol: str, sector: str, industry: str) -> tuple[list[str], 
     config = load_allowed_sources()
     groups = config.get("peer_groups") or {}
     sector_defaults = config.get("default_peers_by_sector") or {}
-    max_peers = int(config.get("max_peers", 6))
 
     industry_key = _normalize_key(industry)
     sector_key = _normalize_key(sector)
@@ -314,7 +348,7 @@ def _resolve_peers(symbol: str, sector: str, industry: str) -> tuple[list[str], 
         return [], niche, True
 
     # Never compare a symbol against itself.
-    peers = [p for p in peers if p.upper() != symbol.upper()][:max_peers]
+    peers = [p for p in peers if p.upper() != symbol.upper()][:max_peers()]
     return peers, niche, fallback
 
 
@@ -332,16 +366,32 @@ def _is_comparable(name: str, value: float | None) -> bool:
     return True
 
 
-def compare_to_peers(symbol: str, metrics: dict[str, float]) -> PeerComparison:
+def compare_to_peers(
+    symbol: str,
+    metrics: dict[str, float],
+    ask_peers: Callable[[str, str, list[str]], list[str] | None] | None = None,
+) -> PeerComparison:
     """Compare a symbol's valuation metrics against the median of its niche.
 
     Each peer costs one rate-limited request; peers that fail to fetch are
     skipped rather than aborting the comparison.
+
+    Peers chosen for this company go first. With none, and no group for its
+    industry, `ask_peers(symbol, niche, suggested)` may supply them; returning
+    nothing keeps the sector list, if there is one.
     """
     symbol = symbol.strip().upper()
     sector = str(metrics.get("_sector", ""))
     industry = str(metrics.get("_industry", ""))
     peers, niche, fallback = _resolve_peers(symbol, sector, industry)
+
+    custom = load_custom_peers().get(symbol)
+    if not custom and fallback and ask_peers is not None:
+        custom = ask_peers(symbol, niche, peers)
+    if custom:
+        peers = [p for p in custom if p != symbol][:max_peers()]
+        niche, fallback = industry or niche, False
+    is_custom = bool(custom)
 
     if not peers:
         return PeerComparison(
@@ -354,8 +404,8 @@ def compare_to_peers(symbol: str, metrics: dict[str, float]) -> PeerComparison:
             verdict="unknown",
             notes=(
                 f"No peer group is declared for industry {industry!r} / sector "
-                f"{sector!r}. Add one under `peer_groups` in "
-                f"config/allowed_sources.yaml to enable niche comparison."
+                f"{sector!r}. Run research.py in a terminal to choose peers, or add "
+                f"them to config/custom_peers.yaml."
                 if industry or sector else
                 "No industry or sector is listed for this symbol (an ETF or fund?), "
                 "so there are no peers to compare with."
@@ -431,7 +481,8 @@ def compare_to_peers(symbol: str, metrics: dict[str, float]) -> PeerComparison:
         rich = sum(1 for v in votes if v > 1 + _VALUATION_TOLERANCE)
         verdict = "cheap" if cheap > rich else "expensive" if rich > cheap else "in-line"
 
-    scope = "sector (no niche group declared)" if fallback else "niche"
+    scope = ("chosen" if is_custom
+             else "sector (no niche group declared)" if fallback else "niche")
     notes = (
         f"Compared against {len(used)} {scope} peers: {', '.join(used)}. "
         f"Valuation reads {verdict} versus the peer median."
@@ -453,6 +504,7 @@ def compare_to_peers(symbol: str, metrics: dict[str, float]) -> PeerComparison:
         peer_values={k: v for k, v in per_ticker.items() if v},
         verdict=verdict,
         notes=notes,
+        is_custom=is_custom,
     )
 
 
@@ -520,17 +572,21 @@ def _classify(metrics: dict[str, float], peers: PeerComparison | None) -> tuple[
     return "fair", reasons
 
 
-def analyze(symbol: str, include_peers: bool = True) -> FundamentalRead:
+def analyze(
+    symbol: str,
+    include_peers: bool = True,
+    ask_peers: Callable[[str, str, list[str]], list[str] | None] | None = None,
+) -> FundamentalRead:
     """Run the full FA pipeline for a symbol.
 
     Set include_peers=False to skip the peer comparison (faster: it avoids one
-    rate-limited request per peer).
+    rate-limited request per peer). `ask_peers` is explained at compare_to_peers.
     """
     symbol = symbol.strip().upper()
     raw = fetch_fundamentals(symbol)
     metrics = {**raw, **compute_ratios(raw)}
 
-    peer_comparison = compare_to_peers(symbol, metrics) if include_peers else None
+    peer_comparison = compare_to_peers(symbol, metrics, ask_peers) if include_peers else None
     signal, reasons = _classify(metrics, peer_comparison)
     if raw.get("_data_notes"):
         reasons.append(f"Data repaired: {raw['_data_notes']}")

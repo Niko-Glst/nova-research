@@ -12,7 +12,7 @@ python serve.py              # web UI at localhost:8000
 python research.py NVDA --html --simulate    # or straight from the CLI
 ```
 
-<sub>Python 3.12 · ~22,400 lines · 849 tests · 8 runtime dependencies</sub>
+<sub>Python 3.12 · ~22,400 lines · 879 tests · 8 runtime dependencies</sub>
 
 ---
 
@@ -91,7 +91,8 @@ of choices. Each of these was made against a plausible-looking alternative.
 A P/E of 36 says nothing until you know the industry trades at 18. Peer groups
 are declared explicitly in [`config/allowed_sources.yaml`](config/allowed_sources.yaml)
 and keyed on the provider's industry label, because no public API offers a
-trustworthy peer list.
+trustworthy peer list. A company without its own group gets a question in the
+terminal, and the answer is kept in [`config/custom_peers.yaml`](config/custom_peers.yaml).
 
 Two problems surfaced against live data and are handled:
 
@@ -230,7 +231,7 @@ Defined in [SECURITY.md](SECURITY.md) and enforced in code:
 
 ## Engineering notes
 
-**849 tests, ~8,000 lines of test code, none of them online.** Statistical functions are checked
+**879 tests, ~8,000 lines of test code, none of them online.** Statistical functions are checked
 against published tables; indicator maths against synthetic series with known
 properties. Several tests are explicit regressions for bugs that only appeared
 against live data:
@@ -303,7 +304,8 @@ python research.py AAPL MSFT NVDA            # several symbols
 python research.py NVDA --html               # HTML report, opens in browser
 python research.py NVDA --html --simulate    # adds backtest, Monte Carlo, probabilities
 python research.py TSLA --period 6mo --insider-days 90
-python research.py AAPL --no-peers           # skip peer comparison (much faster)
+python research.py AAPL --no-peers           # skip peer comparison (much faster, not in the track record)
+python research.py A B C --no-ask-peers      # never stop to ask for peers (batch runs)
 python research.py AAPL --json > report.json
 
 python history.py rescore                    # recorded runs under the current model

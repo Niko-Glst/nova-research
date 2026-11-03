@@ -13,6 +13,7 @@ import threading
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
@@ -129,6 +130,24 @@ class TestAnalyseStream:
             server + "/analyze?ticker=notaticker123456", timeout=10
         ) as response:
             assert "text/event-stream" in response.headers["Content-Type"]
+
+
+class TestTrackRecord:
+    @pytest.mark.parametrize(
+        ("peer_comparison", "recorded"),
+        [(SimpleNamespace(verdict="cheap"), 1), (SimpleNamespace(verdict="unknown"), 0), (None, 0)],
+    )
+    def test_a_run_without_a_peer_read_is_saved_but_not_recorded(
+        self, monkeypatch, peer_comparison, recorded
+    ):
+        report = SimpleNamespace(symbol="TEST",
+                                 fundamental=SimpleNamespace(peer_comparison=peer_comparison))
+        saved, signals = [], []
+        monkeypatch.setattr(serve.report_archive, "save_report",
+                            lambda report, directory: saved.append(report))
+        monkeypatch.setattr(serve.signal_snapshots, "record", signals.append)
+        serve._write_report_file(report)
+        assert saved == [report] and len(signals) == recorded
 
 
 class TestBindingIsLocalOnly:

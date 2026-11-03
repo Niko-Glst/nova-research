@@ -18,7 +18,8 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 
-from agents import report_archive, research_report, signal_snapshots
+from agents import fa_analyst, report_archive, research_report, signal_snapshots
+from common.tickers import valid_ticker
 from config.settings import ROOT_DIR
 
 
@@ -66,7 +67,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-peers",
         action="store_true",
-        help="Skip the peer comparison (faster: avoids one request per peer).",
+        help="Skip the peer comparison (faster: avoids one request per peer). "
+        "Such a run can give another verdict, so it stays out of the track record.",
+    )
+    parser.add_argument(
+        "--no-ask-peers",
+        action="store_true",
+        help="Do not stop to ask for peers when a company has no group of its own "
+        "(for batch runs; never asked when input does not come from a terminal).",
     )
     parser.add_argument(
         "--any-news-source",
@@ -101,8 +109,64 @@ def _write_html(report, directory: str) -> Path:
     return report_archive.save_report(report, directory)
 
 
+def _known_ticker(ticker: str) -> bool:
+    """Whether Yahoo has data for this ticker; a wrong one would just drop out later."""
+    if valid_ticker(ticker) is None:
+        return False
+    try:
+        fa_analyst.fetch_fundamentals(ticker)
+    except Exception:
+        return False
+    return True
+
+
+def _ask_peers(symbol: str, niche: str, suggested: list[str]) -> list[str] | None:
+    """Ask in the terminal which companies to compare with, and remember the answer.
+
+    Everything goes to stderr so `--json` output stays clean. Enter keeps what
+    there is. Returns the peers to use, or None.
+    """
+    limit = fa_analyst.max_peers()
+    if suggested:
+        print(f"\n{symbol}: no peer group for its industry, so it would be compared with the "
+              f"whole {niche} sector: {', '.join(suggested)}.\n"
+              f"Type up to {limit} tickers of real competitors, separated by spaces or commas, "
+              f"or press Enter to keep the sector.", file=sys.stderr)
+    else:
+        print(f"\n{symbol}: no peers known ({niche}). Without peers the valuation is not checked "
+              f"and the run stays out of the track record.\n"
+              f"Type up to {limit} tickers of competitors, separated by spaces or commas, "
+              f"or press Enter to skip.", file=sys.stderr)
+
+    while True:
+        print("Peers: ", end="", file=sys.stderr, flush=True)
+        typed = sys.stdin.readline().replace(",", " ").upper().split()
+        if not typed:  # Enter, or the end of the input
+            return None
+        peers = [t for t in dict.fromkeys(typed) if t != symbol]
+        if not peers:
+            print(f"{symbol} cannot be its own peer.", file=sys.stderr)
+            continue
+        if len(peers) > limit:
+            print(f"Using the first {limit}: at most {limit} peers are compared.", file=sys.stderr)
+            peers = peers[:limit]
+        unknown = [t for t in peers if not _known_ticker(t)]
+        if unknown:
+            print(f"No data for {', '.join(unknown)}: check the spelling (non-US tickers need "
+                  f"their suffix, like ASML.AS) and type the list again.", file=sys.stderr)
+            continue
+        try:
+            fa_analyst.save_custom_peers(symbol, peers)
+            print(f"Saved in {fa_analyst.CUSTOM_PEERS_PATH}", file=sys.stderr)
+        except (OSError, ValueError) as exc:
+            print(f"Used for this run but not saved -- {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+        return peers
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    ask_peers = _ask_peers if not args.no_ask_peers and sys.stdin.isatty() else None
 
     reports = []
     failed = False
@@ -116,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
                 insider_lookback_days=args.insider_days,
                 strict_allowlist=not args.any_news_source,
                 run_simulation=args.simulate,
+                ask_peers=ask_peers,
             )
         except Exception as exc:
             failed = True
@@ -123,11 +188,15 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         reports.append(report)
-        try:  # build the point-in-time signal history; never fail the run over it
-            signal_snapshots.record(report)
-        except Exception as exc:
-            print(f"{symbol}: signal snapshot not saved -- {type(exc).__name__}: {exc}",
+        if not signal_snapshots.has_peer_read(report):
+            print(f"{symbol}: not added to the track record (no peer comparison).",
                   file=sys.stderr)
+        else:
+            try:  # build the point-in-time signal history; never fail the run over it
+                signal_snapshots.record(report)
+            except Exception as exc:
+                print(f"{symbol}: signal snapshot not saved -- {type(exc).__name__}: {exc}",
+                      file=sys.stderr)
         if not args.json:
             print(research_report.format_report(report))
             print()

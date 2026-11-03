@@ -76,8 +76,8 @@ code (see section 8).
   `pyarrow` (the parquet snapshot store; without it runs are recorded in CSV and
   the store-based steps say so). No statsmodels, matplotlib, vectorbt or
   pandas-ta. This is deliberate (section 8).
-- 849 tests (`pytest`), all offline: 847 pass, 2 are skipped until pyarrow is
-  installed (2026-11-02).
+- 879 tests (`pytest`), all offline: all pass with pyarrow installed; without it
+  2 are skipped (2026-11-03).
 - Model 4.0.0, currency fix (2026-11-02, `agents/currency.py`): Yahoo divides a
   market cap in the quote currency by revenue in the reporting currency without
   converting. Price/sales is now recomputed wherever the two differ, price/book
@@ -153,7 +153,16 @@ calls per provider, plus one call per peer).
 
 Use the same flags each time for runs you intend to compare. A run with
 `--no-peers` and one without differ in the fundamental stance for reasons
-unrelated to the company.
+unrelated to the company. So a run in which no peer comparison judged the price
+(`--no-peers`, no peers known, every lookup failed, or the fundamental read
+failed) is not added to the track record, in `serve.py` likewise.
+
+When a company has no peer group of its own, `research.py` asks in the terminal
+which tickers to compare it with: Enter keeps the sector list, or skips when there
+is none. The answer is checked against Yahoo and saved per company in
+`config/custom_peers.yaml`, which goes before `peer_groups`. No LLM is involved.
+`--no-ask-peers` turns the question off for batch runs, and it is never asked when
+input does not come from a terminal, or in `serve.py`.
 
 Correlation analysis:
 
@@ -387,6 +396,8 @@ the same data they are now chosen on, and the gaps are 1-2%.
 - `config/allowed_sources.yaml`: subreddits, news domains, rate limits,
   `peer_groups` (keyed on normalised yfinance industry label),
   `default_peers_by_sector`, `max_peers: 6`.
+- `config/custom_peers.yaml`: peers chosen per company, written by `research.py`
+  or by hand; they go before `peer_groups`.
 - `config/settings.py`: `load_allowed_sources()`, credential getters (raise if
   unset).
 - `common/rate_limit.py`: `get_limiter("yfinance").wait()`. One shared,

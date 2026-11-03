@@ -32,14 +32,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from agents import html_report, report_archive, research_report, signal_snapshots
+from common.tickers import valid_ticker as _valid_ticker
 from config.settings import ROOT_DIR
 
 # The project's own reports folder, whatever directory the server starts in.
 REPORTS_DIR = ROOT_DIR / "reports"
-
-# Ticker charset. Real symbols are letters with an optional dot or hyphen
-# (BRK.B, RDS-A); anything else is rejected before it reaches a provider.
-_TICKER_MAX_LENGTH = 12
 
 # Completed reports, kept in memory so the result page can be re-read without
 # re-running the analysis. Keyed by job id.
@@ -47,18 +44,6 @@ _reports: dict[str, research_report.ResearchReport] = {}
 _reports_lock = threading.Lock()
 # Report files and the snapshot history are shared by every analysis thread.
 _files_lock = threading.Lock()
-
-
-def _valid_ticker(raw: str) -> str | None:
-    """Return a normalized ticker, or None when the input is not one."""
-    candidate = (raw or "").strip().upper()
-    if not candidate or len(candidate) > _TICKER_MAX_LENGTH:
-        return None
-    if not all(character.isalnum() or character in ".-^" for character in candidate):
-        return None
-    if not any(character.isalpha() for character in candidate):
-        return None
-    return candidate
 
 
 INDEX_PAGE = """<!doctype html>
@@ -417,6 +402,7 @@ def _write_report_file(report: research_report.ResearchReport) -> None:
     Two analyses can finish at once (two browser tabs), and both rewrite the
     reports index and append to the snapshot file, so the writes take turns. A
     failed write is reported on the console; the report itself is still served.
+    A run without a peer comparison can give another verdict, so it is not recorded.
     """
     with _files_lock:
         try:
@@ -424,6 +410,10 @@ def _write_report_file(report: research_report.ResearchReport) -> None:
         except Exception as exc:
             print(f"{report.symbol}: report file not saved -- {type(exc).__name__}: {exc}",
                   file=sys.stderr)
+        if not signal_snapshots.has_peer_read(report):
+            print(f"{report.symbol}: not added to the track record (no peer comparison).",
+                  file=sys.stderr)
+            return
         try:  # build the point-in-time signal history; never fail the run over it
             signal_snapshots.record(report)
         except Exception as exc:

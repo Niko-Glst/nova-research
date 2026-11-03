@@ -118,6 +118,7 @@ def analyze(
     backtest_period: str = "5y",
     num_simulations: int = 2000,
     on_progress: Callable[[str, str], None] | None = None,
+    ask_peers: Callable[[str, str, list[str]], list[str] | None] | None = None,
 ) -> ResearchReport:
     """Run every analyst for a symbol and combine their verdicts.
 
@@ -128,6 +129,9 @@ def analyze(
     so a caller with a user waiting can show what is happening. A full run takes
     one to three minutes, almost all of it rate-limit sleeping, and silence for
     that long reads as a hang.
+
+    `ask_peers` lets a caller with a user waiting supply peers for a company that
+    has no group of its own (see fa_analyst.compare_to_peers).
     """
     symbol = symbol.strip().upper()
     if not symbol:
@@ -159,7 +163,7 @@ def analyze(
         + (" and comparing against niche peers" if include_peers else ""),
     )
     try:
-        fundamental = fa_analyst.analyze(symbol, include_peers=include_peers)
+        fundamental = fa_analyst.analyze(symbol, include_peers=include_peers, ask_peers=ask_peers)
         report_progress("fundamental", f"Fundamental read: {fundamental.signal}")
     except Exception as exc:
         errors["fundamental"] = f"{type(exc).__name__}: {exc}"
@@ -449,7 +453,8 @@ def format_report(report: ResearchReport) -> str:
         # --- Peer comparison ---------------------------------------------
         peers = fundamental.peer_comparison
         if peers is not None and peers.peers_used:
-            scope = "SECTOR" if peers.is_sector_fallback else "NICHE"
+            scope = ("CHOSEN PEER" if peers.is_custom
+                     else "SECTOR" if peers.is_sector_fallback else "NICHE")
             lines += [
                 "",
                 f"  {scope} COMPARISON: {peers.niche} -> {peers.verdict.upper()}",

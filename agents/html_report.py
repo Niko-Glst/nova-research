@@ -356,7 +356,7 @@ def _peer_section(report: ResearchReport) -> str:
         for bar in bars
     )
 
-    scope = "sector" if peers.is_sector_fallback else "niche"
+    scope = "chosen" if peers.is_custom else "sector" if peers.is_sector_fallback else "niche"
     fallback_note = (
         '<p class="warn-note">No niche-level peer group is declared for this '
         "industry, so this is a broader sector comparison.</p>"

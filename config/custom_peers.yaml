@@ -1,0 +1,5 @@
+# Peers chosen per company, written by research.py when it asks in the terminal.
+# They go before the groups in allowed_sources.yaml. Edit or remove a line by hand
+# to change a choice. Comments below this header are lost when research.py saves.
+#
+# SOFW.TA: [AAA, BBB, CCC]
