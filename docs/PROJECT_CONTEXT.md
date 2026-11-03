@@ -564,8 +564,9 @@ data.convention    # the currency convention, to print next to any figure
 
 ## 9. Known gaps
 
-- No point-in-time snapshots of stances, so stance-vs-forward-return studies
-  are not possible yet.
+- Point-in-time snapshots of stances exist only since the first recorded run
+  (2026-10-15), so stance-vs-forward-return studies of the fundamental, technical,
+  insider and sentiment legs have too little history yet.
 - Sentiment has no minimum sample: one Reddit post can set the leg to bullish.
 - Insider data is US-only; no AMF/FCA/BaFin source.
 - No portfolio or holdings store: `risk_read` uses the local index as the book.
